@@ -24,6 +24,7 @@ function list_push(xs, x) { return [...xs, x]; }
 function integer_to_text(n) { return String(n); }
 function char_code(c) { return c.charCodeAt ? c.charCodeAt(0) : c; }
 function char_at(s, i) { return s[i]; }
+function char_to_text(c) { return typeof c === 'number' ? String.fromCharCode(c) : c; }
 function negate(n) { return -n; }
 function bit_xor(a,b){return (Math.trunc(a)^Math.trunc(b));}
 function bit_and(a,b){return (Math.trunc(a)&Math.trunc(b));}
