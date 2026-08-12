@@ -1,0 +1,11 @@
+Chapter: HelloWsl
+  cites Foreword chapter Console
+
+Section: Entry
+
+  opening : [Console] Nothing = act
+   print-line-uni "Hello from Codex on WSL, via QEMU."
+   print-line-uni "Compiled by the seed, running on Linux."
+  end
+
+Page 1

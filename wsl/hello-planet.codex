@@ -1,0 +1,20 @@
+Chapter: HelloPlanet
+  cites Foreword chapter Console
+  cites Foreword chapter Maybe
+
+Section: Definitions
+
+  greet : Maybe Text -> Text
+  greet (m) =
+   when m
+    is Just (name) -> "Hello " & name & "!"
+    is None -> "Hello, whoever is out there!"
+
+  opening : [Console.Read, Console.Write] Nothing
+  opening = act
+    print-line-uni "What planet are you from?"
+    s <- read-line
+    print-line-uni (greet s)
+  end
+
+Page 1
