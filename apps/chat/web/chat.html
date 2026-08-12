@@ -590,6 +590,7 @@ function register_cb(resp) {
 function wire_compose(x) {
   return (() => {
     const el = dom_get("msg-input");
+    if (!el) return 0; // compose bar only renders once a conversation is active
     const w = dom_on_input(el, on_compose_input);
     const el2 = dom_on_key(el, on_compose_key);
     return 0;
@@ -623,6 +624,7 @@ function on_conv_list_click(id) {
 function scroll_messages(x) {
   return (() => {
     const el = dom_get("messages");
+    if (!el) return 0; // messages pane only renders once a conversation is active
     const s = dom_set_style(el, "scrollBehavior", "smooth");
     return 0;
   })();
