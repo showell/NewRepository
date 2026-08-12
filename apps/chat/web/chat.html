@@ -499,6 +499,11 @@ function load_messages(x) {
 }
 function msgs_cb(resp) {
   return (() => {
+    // Skip the re-render when polling returns the same thread we already show;
+    // a full-tree render rebuilds the compose box and would eat in-progress typing.
+    const key = show(state_get(sk_active_conv)) + ":" + resp;
+    if (state_get_text("msgs-last") === key) return 0;
+    const s0 = state_set_text("msgs-last", key);
     const obj = json_parse_obj(resp);
     const count_str = json_obj_field(obj, "count");
     const count = text_to_int(count_str);
@@ -632,10 +637,15 @@ function scroll_messages(x) {
 }
 function render_chat(x) {
   return (() => {
+    // The mount replaces the whole DOM tree; carry the compose box's
+    // value and focus across the rebuild.
+    const hadFocus = document.activeElement && document.activeElement.id === "msg-input";
     const m = mount_widget_themed(chat_theme, page_tree(0));
     const w = wire_compose(0);
     const w2 = wire_conv_clicks(0);
     const sc = scroll_messages(0);
+    const el = dom_get("msg-input");
+    if (el) { el.value = state_get_text(sk_compose); if (hadFocus) el.focus(); }
     return 0;
   })();
 }
