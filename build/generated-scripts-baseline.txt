@@ -32,3 +32,4 @@ test-boards
 test-compile-batch
 test-disk-compile
 test-run
+vm-config
