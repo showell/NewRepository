@@ -791,7 +791,7 @@ Section: Builtin Emitter
     ZigBuiltinEmitter { name = "__list-with-capacity", emit = \args ctx d ty -> "cx_ll_with_capacity(" & zig-ll-elem ty & ", " & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
     ZigBuiltinEmitter { name = "text-compare", emit = \args ctx d ty -> "cx_text_compare(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ", " & emit-zig-expr (list-at args 1) ctx (d + 1) & ")" },
     ZigBuiltinEmitter { name = "char-to-text", emit = \args ctx d ty -> "cx_char_to_text(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
-    ZigBuiltinEmitter { name = "__linked-list-empty", emit = \args ctx d ty -> "cx_ll_empty(" & zig-ll-elem ty & ")" },
+    ZigBuiltinEmitter { name = "__linked-list-empty", emit = \args ctx d ty -> "cx_ll_empty_n(" & zig-ll-elem ty & ", " & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
     ZigBuiltinEmitter { name = "__linked-list-push", emit = \args ctx d ty -> "cx_ll_push(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ", " & emit-zig-expr (list-at args 1) ctx (d + 1) & ")" },
     ZigBuiltinEmitter { name = "__linked-list-to-list", emit = \args ctx d ty -> emit-zig-expr (list-at args 0) ctx (d + 1) },
     ZigBuiltinEmitter { name = "__deck-pos", emit = \args ctx d ty -> "0" },
@@ -1359,6 +1359,21 @@ Section: Lambda and List Helpers
    else if zig-is-num-lit t | zig-is-num-lit el then "@as(f64, " & s & ")"
    else s
 
+ A match needs the same pin as an if, and for the same reason: a bare literal
+ arm is comptime_int, and zig refuses a comptime-only value that depends on
+ runtime control flow. The emitter's own zig-count-ctor-pats is the smallest
+ example -- `let inc = when p is IrCtorPat -> 1 is otherwise -> 0` emitted a
+ switch whose arms were untyped literals, and the plug could not compile
+ itself. Every arm of a match has the match's type, so pinning on any literal
+ arm is the same rule zig-pin-lit applies to the two branches of an if.
+
+  zig-pin-arms : List IRBranch, Integer, Text -> Text
+  zig-pin-arms (bs) (i) (s) =
+   if i >= list-length bs then s
+   else if zig-is-int-lit ((list-at bs i).body) then "@as(i64, " & s & ")"
+   else if zig-is-num-lit ((list-at bs i).body) then "@as(f64, " & s & ")"
+   else zig-pin-arms bs (i + 1) s
+
  A synthesized lambda -- every `for` expression becomes one, since the
  desugarer rewrites `for` into map-list -- carries no useful type on its
  parameters, so reading p.type-val emits anyopaque, which zig refuses as a
@@ -1727,7 +1742,7 @@ Section: Match Emission
    let mty = if text-length (zig-ll-elem-opt mty0) > 0 then mty0
       else zig-arms-list-type branches 0 mty0
    in let ex = zig-match-exhaustive ctx (zig-expr-type scrut) branches
-   in "switch (" & emit-zig-expr scrut ctx (d + 1) & zig-match-deref ctx (zig-expr-type scrut) & ") { " & emit-zig-match-arms branches 0 ctx d ex mty & " }"
+   in zig-pin-arms branches 0 ("switch (" & emit-zig-expr scrut ctx (d + 1) & zig-match-deref ctx (zig-expr-type scrut) & ") { " & emit-zig-match-arms branches 0 ctx d ex mty & " }")
 
   emit-zig-match-arms : List IRBranch, Integer, ZigCtx, Integer, Boolean, CodexType -> Text
   emit-zig-match-arms (branches) (i) (ctx) (d) (ex) (mty) =
@@ -2583,6 +2598,7 @@ Section: Chapter Emission
    & "fn CxFn3(comptime A: type, comptime B: type, comptime C: type, comptime R: type) type {\n    return struct { ctx: *anyopaque, call: *const fn (*anyopaque, A, B, C) R };\n}\n"
    & "fn CxFn4(comptime A: type, comptime B: type, comptime C: type, comptime D: type, comptime R: type) type {\n    return struct { ctx: *anyopaque, call: *const fn (*anyopaque, A, B, C, D) R };\n}\n"
    & "fn CxList(comptime T: type) type {\n    return struct { items: std.ArrayListUnmanaged(T) = .empty };\n}\n"
+   & "// The size hint has no use here -- a CxList starts empty whatever it is\n// told -- but the argument still has to be consumed. It is a binding at the\n// call site, and zig refuses a binding whose only consumer disappeared;\n// that is finding 12 with __deck-set, in the same file, twice.\nfn cx_ll_empty_n(comptime T: type, n: i64) *CxList(T) {\n    _ = n;\n    return cx_ll_empty(T);\n}\n"
    & "fn cx_ll_empty(comptime T: type) *CxList(T) {\n    const l = cx_gpa.create(CxList(T)) catch @panic(\"oom\");\n    l.* = .{};\n    return l;\n}\n"
    & "fn cx_ll_push(l: anytype, v: anytype) @TypeOf(l) {\n    l.items.append(cx_gpa, v) catch @panic(\"oom\");\n    return l;\n}\n"
    & "fn cx_ll_of(comptime T: type, vs: []const T) *CxList(T) {\n    const l = cx_ll_empty(T);\n    l.items.appendSlice(cx_gpa, vs) catch @panic(\"oom\");\n    return l;\n}\n"
