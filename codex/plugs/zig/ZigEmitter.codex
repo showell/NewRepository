@@ -63,7 +63,7 @@ Section: Keywords and Sanitization
  are the same identifier -- so these RENAME instead. X86_64Boot binds a
  chain st, sta, stb, stc, std, ste; the sixth one is `std`.
 
-  zig-prelude-decls : List Text = ["std", "main", "cx_heap", "cx_hp", "cx_arena_state", "cx_gpa", "cx_dptr", "cx_bivy", "cx_nest"]
+  zig-prelude-decls : List Text = ["std", "main", "cx_entry_shim", "cx_heap", "cx_hp", "cx_arena_state", "cx_gpa", "cx_dptr", "cx_bivy", "cx_nest"]
 
   is-zig-prelude-decl : Text -> Boolean
   is-zig-prelude-decl (s) =
@@ -2718,11 +2718,21 @@ Section: Chapter Emission
  in every emitted program. Rebuild to change it.
 
   zig-main : Text -> Text
+
+ The entry rides a shim, never the spawn directly: std.Thread.spawn
+ requires startFn to return void (or u8/noreturn), and a subject whose
+ entry returns a value -- most of the depot's tests end in an Integer --
+ satisfied bare metal, which discards the top-of-stack result at halt,
+ while refusing to compile here. The shim is that discard, written out.
+
   zig-main (entry) =
-   "pub fn main() void {\n"
+   "fn cx_entry_shim() void {\n"
+   & "    _ = " & zig-sanitize entry & "();\n"
+   & "}\n"
+   & "pub fn main() void {\n"
    & "    const stack_bytes: usize = 512 * 1024 * 1024;\n"
    & "    const t = std.Thread.spawn(.{ .stack_size = stack_bytes }, "
-   & zig-sanitize entry & ", .{}) catch @panic(\"spawn\");\n"
+   & "cx_entry_shim, .{}) catch @panic(\"spawn\");\n"
    & "    t.join();\n}\n"
 
   zig-prelude : Text =
