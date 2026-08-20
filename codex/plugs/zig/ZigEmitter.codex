@@ -69,11 +69,25 @@ Section: Keywords and Sanitization
   is-zig-prelude-decl (s) =
    is-zig-keyword-loop zig-prelude-decls s 0 (list-length zig-prelude-decls)
 
+ An identifier holding a tier-1 letter (any CCE byte at 128 or above --
+ the frame bytes of non-ASCII letters) is not a bare zig identifier, but
+ zig's @"..." form takes arbitrary UTF-8 and the plug's output boundary
+ converts CCE to UTF-8 on the way out, so quoting the whole name is
+ enough. This is the ident-letters gap: the char migration made such
+ names reachable and the emitter shipped them bare.
+
+  zig-has-hi-byte : Text, Integer -> Boolean
+  zig-has-hi-byte (s) (i) =
+   if i >= text-length s then False
+   else if char-code-at s i >= 128 then True
+   else zig-has-hi-byte s (i + 1)
+
   zig-sanitize : Text -> Text
   zig-sanitize (name) =
    let s0 = text-replace name "-" "_"
    in let s = text-replace s0 "/" "_"
-   in if is-zig-prelude-decl s then s & "_"
+   in if zig-has-hi-byte s 0 then "@\"" & s & "\""
+      else if is-zig-prelude-decl s then s & "_"
       else if is-zig-keyword s | is-zig-primitive s then "@\"" & s & "\""
       else s
 
