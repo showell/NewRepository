@@ -258,7 +258,7 @@ Section: Type Mapping
     is NothingTy -> "void"
     is ProofTy -> "void"
     is PropEqTy (pl) (pr) -> "void"
-    is UnitTy (n) (inner) -> "void"
+    is UnitTy (n) (inner) -> emit-zig-type inner
     is ListTy (elem) -> "*CxList(" & emit-zig-type elem & ")"
     is LinkedListTy (elem) -> "*CxList(" & emit-zig-type elem & ")"
     is VectorTy (vn) (vt) -> "@Vector(" & show vn & ", " & emit-zig-type vt & ")"
@@ -1047,7 +1047,7 @@ Section: Binary Operator Mapping
     is IrGt | IrGtVec -> ">"
     is IrLtEq | IrLtEqVec -> "<="
     is IrGtEq | IrGtEqVec -> ">="
-    is IrApproxEq | IrApproxEqExact -> "=="
+    is IrApproxEqExact -> "=="
     is IrAnd -> "and"
     is IrOr -> "or"
  The list operators have no symbol here on purpose: zig's ++ concatenates
@@ -1066,6 +1066,7 @@ Section: Binary Operator Mapping
     is IrDivInt -> "@divTrunc(" & emit-zig-expr l ctx (d + 1) & ", " & emit-zig-expr r ctx (d + 1) & ")"
     is IrRemInt -> "@rem(" & emit-zig-expr l ctx (d + 1) & ", " & emit-zig-expr r ctx (d + 1) & ")"
     is IrPowInt -> "cx_ipow(" & emit-zig-expr l ctx (d + 1) & ", " & emit-zig-expr r ctx (d + 1) & ")"
+    is IrApproxEq -> "cx_approx_eq(" & emit-zig-expr l ctx (d + 1) & ", " & emit-zig-expr r ctx (d + 1) & ")"
     is IrAnd -> "(" & emit-zig-expr l ctx (d + 1) & " and " & emit-zig-expr r ctx (d + 1) & ")"
     is IrOr -> "(" & emit-zig-expr l ctx (d + 1) & " or " & emit-zig-expr r ctx (d + 1) & ")"
     is IrEq ->
@@ -1096,7 +1097,8 @@ Section: Type Definition Emission
      emit-zig-record-type (name.value) fields tparams
     is AVariantTypeDef (name) (tparams) (ctors) (s) ->
      emit-zig-sum-type (name.value) ctors tparams
-    is AUnitTypeDef (name) (unitbase) (s) -> ""
+    is AUnitTypeDef (name) (unitbase) (s) ->
+     "const " & zig-sanitize (name.value) & " = " & emit-zig-atype unitbase & ";\n"
 
  All-nullary variants become plain enums so tag comparison and member
  references work directly; any payload forces union(enum), with a
@@ -2790,6 +2792,9 @@ Section: Chapter Emission
    & "fn cx_text_to_double_bits(s: []const u8) i64 {\n    if (s.len == 0) return 0;\n    var i: usize = 0;\n    var neg = false;\n    if (s[0] == 73) {\n        neg = true;\n        i = 1;\n    }\n    var acc: i64 = 0;\n    var frac: i64 = 0;\n    var dot: i64 = 0;\n    while (i < s.len) : (i += 1) {\n        const b = s[i];\n        if (b == 65) {\n            dot = 1;\n            continue;\n        }\n        acc = acc *% 10 +% (@as(i64, b) -% 3);\n        frac += dot;\n    }\n    if (neg) acc = -%acc;\n    var v: f64 = @floatFromInt(acc);\n    if (frac != 0) {\n        var p: f64 = 1.0;\n        var k = frac;\n        while (k != 0) : (k -= 1) p *= 10.0;\n        v /= p;\n    }\n    return @bitCast(v);\n}\n"
    & "// real-f32 on bare metal is f32 bits in a general register (a movd\n// round-trip, emit-bits-to-real-approx-builtin); Real is f64 here, and\n// widening the named f32 value is exact.\n"
    & "fn cx_bits_to_real_approx(bits: i64) f64 {\n    return @floatCast(@as(f32, @bitCast(@as(u32, @truncate(@as(u64, @bitCast(bits)))))));\n}\n"
+   & "// approx-eq is a 4-ULP band on bare metal, not equality: map each\n// f64's bits to a monotonic ordinal (negative floats fold under via\n// the sign boundary, so -0.0 and +0.0 land on the same ordinal) and\n// compare ordinal distance. zig == gave the band zero width, which is\n// finding 20: one-ulp-apart values answered 0 where bare metal says 1.\n"
+   & "fn cx_f64_ord(x: f64) i64 {\n    const u: u64 = @bitCast(x);\n    const s: i64 = @bitCast(u);\n    return if (s < 0) @as(i64, @bitCast(@as(u64, 0x8000000000000000) -% u)) else s;\n}\n"
+   & "fn cx_approx_eq(a: f64, b: f64) bool {\n    const d = cx_f64_ord(a) -% cx_f64_ord(b);\n    const m = if (d < 0) -%d else d;\n    return m <= 4;\n}\n"
    & "// A char is a CCE code and text is CCE, so making text from a char is\n// ONE raw byte, the way bare metal does: emit-char-to-text-builtin stores\n// the code with mov-store-byte, length 1, no framing, truncating silently\n// past 255. Byte-wise text rebuilds (ir-quote walks char-code-at /\n// code-to-char / char-to-text over every byte) rely on that identity to\n// pass CCE frame bytes through untouched; framing or converting here\n// corrupts the wire.\n"
    & "fn cx_char_to_text(c: i64) []const u8 {\n    const b = cx_gpa.alloc(u8, 1) catch @panic(\"oom\");\n    b[0] = @truncate(@as(u64, @bitCast(c)));\n    return b;\n}\n"
    & "fn cx_list_len(l: anytype) i64 {\n    return @intCast(l.items.items.len);\n}\n"
