@@ -803,8 +803,8 @@ Section: Builtin Emitter
     ZigBuiltinEmitter { name = "bits-to-real-approx", emit = \args ctx d ty -> "cx_bits_to_real_approx(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
     ZigBuiltinEmitter { name = "print-error", emit = \args ctx d ty -> "cx_print_line(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
     ZigBuiltinEmitter { name = "print-error-uni", emit = \args ctx d ty -> "cx_print_line(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
-    ZigBuiltinEmitter { name = "show", emit = \args ctx d ty -> "cx_show_int(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
-    ZigBuiltinEmitter { name = "integer-to-text", emit = \args ctx d ty -> "cx_show_int(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
+    ZigBuiltinEmitter { name = "show", emit = \args ctx d ty -> "cx_show_int(" & zig-int-of (list-at args 0) ctx d & ")" },
+    ZigBuiltinEmitter { name = "integer-to-text", emit = \args ctx d ty -> "cx_show_int(" & zig-int-of (list-at args 0) ctx d & ")" },
     ZigBuiltinEmitter { name = "text-length", emit = \args ctx d ty -> "cx_text_len(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ")" },
     ZigBuiltinEmitter { name = "char-code-at", emit = \args ctx d ty -> "cx_char_at(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ", " & emit-zig-expr (list-at args 1) ctx (d + 1) & ")" },
     ZigBuiltinEmitter { name = "substring", emit = \args ctx d ty -> "cx_substring(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ", " & emit-zig-expr (list-at args 1) ctx (d + 1) & ", " & emit-zig-expr (list-at args 2) ctx (d + 1) & ")" },
@@ -2326,11 +2326,35 @@ Section: Apply Emission
    else if list-length args == 1 then open & base & "{ ." & cname & " = " & emit-zig-ctor-args c args ctx d 0 & " }" & close
    else open & base & "{ ." & cname & " = .{ " & emit-zig-ctor-args c args ctx d 0 & " } }" & close
 
+ Boolean IS the machine word on bare metal -- True is 1, False is 0 in a
+ register -- so an Integer context accepts a Boolean by identity there,
+ and must accept it by @intFromBool here: the depot's tests print
+ comparisons through show-int as a matter of course. Coerced at the
+ boundaries that DECLARE Integer (call arguments, the show builtins),
+ never by a blanket rule inside emit-zig-expr: expected types propagate
+ down the recursion, and a global rule would wrap every level.
+
+  zig-int-text : IRExpr, Text -> Text
+  zig-int-text (a) (one) =
+   when zig-expr-type a
+    is BooleanTy -> "@intFromBool(" & one & ")"
+    is otherwise -> one
+
+  zig-int-of : IRExpr, ZigCtx, Integer -> Text
+  zig-int-of (a) (ctx) (d) = zig-int-text a (emit-zig-expr a ctx (d + 1))
+
+  zig-coerce-to : CodexType, IRExpr, Text -> Text
+  zig-coerce-to (want) (a) (one) =
+   when want
+    is IntegerTy (lo) (hi) (mode) -> zig-int-text a one
+    is otherwise -> one
+
   emit-zig-call-args : Text, List IRExpr, ZigCtx, Integer, Integer -> Text
   emit-zig-call-args (fname) (args) (ctx) (d) (i) =
    if i == list-length args then ""
    else let a = list-at args i
-   in let one = emit-zig-expr a (zig-expect ctx (zig-callee-param-type ctx fname i)) (d + 1)
+   in let want = zig-callee-param-type ctx fname i
+   in let one = zig-coerce-to want a (emit-zig-expr a (zig-expect ctx want) (d + 1))
    in if i == list-length args - 1 then one
       else one & ", " & emit-zig-call-args fname args ctx d (i + 1)
 
