@@ -1842,6 +1842,16 @@ Section: Match Emission
        else emit-zig-expr body ctx (d + 1)
    else emit-zig-expr body ctx (d + 1)
 
+ A Boolean literal in a pattern arrives as IrLitPat text "True", and a
+ bool switch arm in zig is lowercase true -- the expression side already
+ maps it (zig-name-map); the pattern side shipped it bare.
+
+  zig-lit-pat-text : Text -> Text
+  zig-lit-pat-text (t) =
+   if t == "True" then "true"
+   else if t == "False" then "false"
+   else t
+
   zig-pat-is-catch-all : IRPat -> Boolean
   zig-pat-is-catch-all (pat) =
    when pat
@@ -1854,7 +1864,7 @@ Section: Match Emission
    let body = body0
    in if ex & zig-pat-is-catch-all pat then ""
    else when pat
-    is IrLitPat (text) (ty) (sp) -> text & " => " & emit-zig-arm-body body mty ctx d & ", "
+    is IrLitPat (text) (ty) (sp) -> zig-lit-pat-text text & " => " & emit-zig-arm-body body mty ctx d & ", "
     is IrCtorPat (name) (subs) (ty) (sp) ->
      let nsubs = list-length subs
      in if nsubs == 0 then "." & zig-sanitize name & " => " & emit-zig-arm-body body mty ctx d & ", "
