@@ -1062,6 +1062,7 @@ Section: Binary Operator Mapping
     is IrLtEq | IrLtEqVec -> "<="
     is IrGtEq | IrGtEqVec -> ">="
     is IrApproxEqExact -> "=="
+    is IrApproxEq -> "@compileError(\"approx-eq needs the runtime band; emit-zig-binary intercepts it\")"
     is IrAnd -> "and"
     is IrOr -> "or"
  The list operators have no symbol here on purpose: zig's ++ concatenates
