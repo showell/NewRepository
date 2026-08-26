@@ -3378,7 +3378,7 @@ Section: Definition Emission
     bound-names = [],
     scope-tvars = tvars
    }
-   in let params-text = emit-zig-def-params (d.params) 0 ctx
+   in let params-text = emit-zig-def-params (d.params) 0 ctx (d.body)
    in let all-params = if text-length params-text == 0
       then zig-drop-trailing-comma comptimes
       else comptimes & params-text
@@ -3517,13 +3517,163 @@ Section: Definition Emission
       else "    _ = " & zig-sanitize (p.name) & ";\n"
    in line & emit-zig-param-discards params (i + 1) body
 
-  emit-zig-def-params : List IRParam, Integer, ZigCtx -> Text
-  emit-zig-def-params (params) (i) (ctx) =
+ A lambda that no DECLARATION fixes reaches this plug with `ErrorTy` for
+ the parameters inference could not pin, and `emit-zig-type` answers the
+ "no zig type for this codex type" marker. Five Roc ports refuse that way.
+ H2 in the register, and the wire read on 2026-08-26 says the hypothesis
+ was too broad and the fix has two halves:
+
+     (def "fold-loop" (param "step" (fn int-default (fn int-default int-default))) ...)
+
+     (def "__lam_0" (params (param "xs" (list int-default))
+                            (param "base" int-default)
+                            (param "step" error))
+                    (apply (apply (apply (apply (name "fold-loop" ...
+
+     (def "__lam_1" (params (param "acc" error) (param "x" error))
+                    (binary add-int (name "acc" int-default) (name "x" int-default) int-default))
+
+ Two of `__lam_0`'s three parameters arrive TYPED. Only the
+ function-typed one is missing, and the answer is in the same IR both
+ times, one node from the hole.
+
+ `__lam_1` is answered by its own body: the parameters say `error` while
+ the uses say `int-default`. `__lam_0`'s `step` is not -- it appears only
+ as an ARGUMENT -- and is answered by the callee, whose declared type
+ rides on the spine's root name.
+
+ Both walks refuse to cross a REBINDING. A `let` or a nested lambda that
+ binds the same name introduces a different variable, and reading its
+ uses as evidence about ours is finding 42's mistake in a new place.
+
+  zig-first-known : CodexType, CodexType -> CodexType
+  zig-first-known (a) (b) =
+   when a
+    is ErrorTy -> b
+    is otherwise -> a
+
+  zig-recover-param : Text, IRExpr -> CodexType
+  zig-recover-param (n) (body) =
+   zig-first-known (zig-typed-use n body) (zig-arg-slot-type n body)
+
+  zig-param-type : IRParam, IRExpr -> CodexType
+  zig-param-type (p) (body) =
+   when (p.type-val)
+    is ErrorTy -> zig-recover-param (p.name) body
+    is otherwise -> (p.type-val)
+
+  zig-typed-use : Text, IRExpr -> CodexType
+  zig-typed-use (n) (e) =
+   when e
+    is IrName (m) (ty) (sp) -> if m == n then ty else ErrorTy
+    is IrBinary (op) (l) (r) (ty) (sp) -> zig-first-known (zig-typed-use n l) (zig-typed-use n r)
+    is IrNegate (o) (ty) (sp) -> zig-typed-use n o
+    is IrIf (c) (t) (el) (ty) (sp) -> zig-first-known (zig-typed-use n c) (zig-first-known (zig-typed-use n t) (zig-typed-use n el))
+    is IrLet (m) (ty) (v) (b) (sp) -> if m == n then zig-typed-use n v else zig-first-known (zig-typed-use n v) (zig-typed-use n b)
+    is IrApply (f) (a) (ty) (sp) -> zig-first-known (zig-typed-use n f) (zig-typed-use n a)
+    is IrLambda (ps) (b) (ty) (sp) -> if zig-params-bind ps 0 n then ErrorTy else zig-typed-use n b
+    is IrList (es) (ty) (sp) -> zig-typed-use-list n es 0
+    is IrMatch (s) (bs) (ty) (sp) -> zig-first-known (zig-typed-use n s) (zig-typed-use-branches n bs 0)
+    is IrAct (ss) (ty) (sp) -> zig-typed-use-stmts n ss 0
+    is IrRecord (nm) (fs) (ty) (sp) -> zig-typed-use-fields n fs 0
+    is IrFieldAccess (r) (f) (ty) (sp) -> zig-typed-use n r
+    is IrFieldStore (r) (f) (v) (ty) (sp) -> zig-first-known (zig-typed-use n r) (zig-typed-use n v)
+    is IrFork (b) (ty) (sp) -> zig-typed-use n b
+    is IrAwait (t) (ty) (sp) -> zig-typed-use n t
+    is IrHandle (eff) (b) (cs) (ty) (sp) -> zig-typed-use n b
+    is IrWithTimeout (secs) (effs) (scopes) (b) (ty) (sp) -> zig-typed-use n b
+    is IrTry (mx) (b) (fb) (fs) (ty) (sp) -> zig-typed-use-stmts n b 0
+    is otherwise -> ErrorTy
+
+  zig-params-bind : List IRParam, Integer, Text -> Boolean
+  zig-params-bind (ps) (i) (n) =
+   if i >= list-length ps then False
+   else if ((list-at ps i).name) == n then True
+   else zig-params-bind ps (i + 1) n
+
+  zig-typed-use-list : Text, List IRExpr, Integer -> CodexType
+  zig-typed-use-list (n) (es) (i) =
+   if i >= list-length es then ErrorTy
+   else zig-first-known (zig-typed-use n (list-at es i)) (zig-typed-use-list n es (i + 1))
+
+  zig-typed-use-branches : Text, List IRBranch, Integer -> CodexType
+  zig-typed-use-branches (n) (bs) (i) =
+   if i >= list-length bs then ErrorTy
+   else let b = list-at bs i
+   in zig-first-known (zig-first-known (zig-typed-use n (b.guard)) (zig-typed-use n (b.body))) (zig-typed-use-branches n bs (i + 1))
+
+  zig-typed-use-stmts : Text, List IRActStmt, Integer -> CodexType
+  zig-typed-use-stmts (n) (ss) (i) =
+   if i >= list-length ss then ErrorTy
+   else let one = when (list-at ss i)
+      is IrDoBind (m) (ty) (v) (sp) -> zig-typed-use n v
+      is IrDoExec (e) (sp) -> zig-typed-use n e
+   in zig-first-known one (zig-typed-use-stmts n ss (i + 1))
+
+  zig-typed-use-fields : Text, List IRFieldVal, Integer -> CodexType
+  zig-typed-use-fields (n) (fs) (i) =
+   if i >= list-length fs then ErrorTy
+   else zig-first-known (zig-typed-use n ((list-at fs i).value)) (zig-typed-use-fields n fs (i + 1))
+
+ The second source. In an apply spine the argument's POSITION is how many
+ applies sit below it, and the spine's root carries the callee's declared
+ type, so the answer is that type's nth parameter. This does not consult
+ `ctx.irdefs`: the type is already on the `IrName` node, and asking the
+ def table would be a second source of truth for one fact.
+
+  zig-arg-slot-type : Text, IRExpr -> CodexType
+  zig-arg-slot-type (n) (e) =
+   when e
+    is IrApply (f) (a) (ty) (sp) ->
+     let here = if zig-is-named a n then zig-fn-nth-param-type (zig-spine-root-type f) (zig-spine-depth f 0) else ErrorTy
+     in zig-first-known here (zig-first-known (zig-arg-slot-type n f) (zig-arg-slot-type n a))
+    is IrLet (m) (ty) (v) (b) (sp) -> if m == n then zig-arg-slot-type n v else zig-first-known (zig-arg-slot-type n v) (zig-arg-slot-type n b)
+    is IrIf (c) (t) (el) (ty) (sp) -> zig-first-known (zig-arg-slot-type n c) (zig-first-known (zig-arg-slot-type n t) (zig-arg-slot-type n el))
+    is IrBinary (op) (l) (r) (ty) (sp) -> zig-first-known (zig-arg-slot-type n l) (zig-arg-slot-type n r)
+    is IrLambda (ps) (b) (ty) (sp) -> if zig-params-bind ps 0 n then ErrorTy else zig-arg-slot-type n b
+    is IrAct (ss) (ty) (sp) -> zig-arg-slot-stmts n ss 0
+    is otherwise -> ErrorTy
+
+  zig-arg-slot-stmts : Text, List IRActStmt, Integer -> CodexType
+  zig-arg-slot-stmts (n) (ss) (i) =
+   if i >= list-length ss then ErrorTy
+   else let one = when (list-at ss i)
+      is IrDoBind (m) (ty) (v) (sp) -> zig-arg-slot-type n v
+      is IrDoExec (e) (sp) -> zig-arg-slot-type n e
+   in zig-first-known one (zig-arg-slot-stmts n ss (i + 1))
+
+  zig-is-named : IRExpr, Text -> Boolean
+  zig-is-named (e) (n) =
+   when e
+    is IrName (m) (ty) (sp) -> m == n
+    is otherwise -> False
+
+  zig-spine-depth : IRExpr, Integer -> Integer
+  zig-spine-depth (e) (acc) =
+   when e
+    is IrApply (f) (a) (ty) (sp) -> zig-spine-depth f (acc + 1)
+    is otherwise -> acc
+
+  zig-spine-root-type : IRExpr -> CodexType
+  zig-spine-root-type (e) =
+   when e
+    is IrApply (f) (a) (ty) (sp) -> zig-spine-root-type f
+    is IrName (m) (ty) (sp) -> ty
+    is otherwise -> ErrorTy
+
+  zig-fn-nth-param-type : CodexType, Integer -> CodexType
+  zig-fn-nth-param-type (ty) (i) =
+   when zig-fn-spine ty
+    is FunTy (p) (fnrow) (r) -> if i == 0 then p else zig-fn-nth-param-type r (i - 1)
+    is otherwise -> ErrorTy
+
+  emit-zig-def-params : List IRParam, Integer, ZigCtx, IRExpr -> Text
+  emit-zig-def-params (params) (i) (ctx) (body) =
    if i == list-length params then ""
    else let p = list-at params i
-   in let one = zig-def-param-name ctx (p.name) & ": " & emit-zig-type (p.type-val) (ctx.scope-tvars)
+   in let one = zig-def-param-name ctx (p.name) & ": " & emit-zig-type (zig-param-type p body) (ctx.scope-tvars)
    in if i == list-length params - 1 then one
-   else one & ", " & emit-zig-def-params params (i + 1) ctx
+   else one & ", " & emit-zig-def-params params (i + 1) ctx body
 
  Assembling the output has the same hazard as escaping it: joining N pieces
  with a right-recursive `&` copies every piece it has not reached yet, so
