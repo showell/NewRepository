@@ -1243,6 +1243,24 @@ Section: Type Definition Emission
    if i == list-length tds then acc
    else emit-zig-type-defs-loop tds (i + 1) (list-push acc (emit-zig-type-def (list-at tds i)))
 
+ A unit family was emitted as nothing, and then its NAME was emitted
+ wherever a record field or a constructor payload was declared with it --
+ `ob_sample_rate: Frequency,` against a zig that has never heard of
+ `Frequency`. 11 corpus programs, finding 17's part B and half of finding
+ 55.
+
+ The obvious fix is to resolve the name at every use, which means
+ threading a unit table through `emit-zig-atype` and its nine call sites.
+ The cheaper one is to stop the name being undefined: a unit family is
+ integer-backed, so DECLARE it. `const Frequency = i64;` makes every
+ verbatim use correct instead of wrong, and the declaration goes through
+ the same `zig-sanitize` as the uses, so the two cannot disagree.
+
+ This does NOT fix finding 55's other half. A source-level TYPE VARIABLE
+ reaching the same fallback -- `queue-test`'s `cx_ll_empty(a)` -- is a
+ name that should have become `T<n>`, not a name that wants declaring,
+ and it still walks past every guard.
+
   emit-zig-type-def : ATypeDef -> Text
   emit-zig-type-def (td) =
    when td
@@ -1250,7 +1268,8 @@ Section: Type Definition Emission
      emit-zig-record-type (name.value) fields tparams
     is AVariantTypeDef (name) (tparams) (ctors) (s) ->
      emit-zig-sum-type (name.value) ctors tparams
-    is AUnitTypeDef (name) (unitbase) (s) -> ""
+    is AUnitTypeDef (name) (unitbase) (s) ->
+     "const " & zig-sanitize (name.value) & " = " & emit-zig-atype unitbase & ";\n\n"
 
  All-nullary variants become plain enums so tag comparison and member
  references work directly; any payload forces union(enum), with a
