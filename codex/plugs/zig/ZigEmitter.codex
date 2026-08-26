@@ -3546,6 +3546,16 @@ Section: Definition Emission
  binds the same name introduces a different variable, and reading its
  uses as evidence about ours is finding 42's mistake in a new place.
 
+ KNOWN GAP, found by re-reading this before it was ever built: a MATCH
+ BRANCH also binds names, and neither walk checks a branch's pattern
+ before reading its guard and body. A pattern binder with the same name
+ as the parameter would be read as evidence about the parameter. The
+ `let` and lambda guards are here and this one is not, because checking
+ it needs a pattern-binder walk that does not exist in this file yet.
+ The consequence is a wrong recovered type rather than a refusal, which
+ is the bad direction, so this wants closing before the rule is
+ trusted.
+
   zig-first-known : CodexType, CodexType -> CodexType
   zig-first-known (a) (b) =
    when a
