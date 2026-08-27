@@ -1413,64 +1413,6 @@ Section: Expression Emission
  Shadowed rebinds count as occurrences, which errs toward keeping the
  const; a wrongly-kept const fails loudly as unused, never silently.
 
- An unused binding still has to SEQUENCE its value, because the value may do
- work, so it discards rather than vanishing. But the discard is not always
- allowed, and zig's actual rule is narrower than it first looks. Measured
- against zig 0.16 rather than inferred from one error message:
-
-   const x = 7; _ = x;            compiles
-   const x = 7; _ = x; use(x);    error: pointless discard of local constant
-   fn f(n) { _ = n; }             compiles
-   fn f(n) { _ = n; use(n); }     error: pointless discard of function parameter
-   fn f(n) { }                    error: unused function parameter
-
- **The discard is an error exactly when the name is ALSO read elsewhere**, and
- that holds for locals and parameters alike. It is not about being a local.
- When the name is read nowhere else the discard is fine, and for a parameter
- it is required.
-
- THE TEST IS "IS THIS A LOCAL", NOT "IS THIS AN IrName", and the difference is
- not academic. The first version of this checked for `IrName` and dropped the
- discard for any of them. An `IrName` whose arity is 0 is emitted by
- `emit-zig-name` as `zig-sanitize n & "()"` -- a CALL -- so dropping its
- discard drops an effect. `deck-bracket-contract` went from `match` to
- `differ`, a wrong answer, because `_ = cx_deck_enter();` stopped being
- emitted. A refusal would have been survivable; a silently wrong deck bracket
- count is exactly what this tree exists to catch.
-
- So the predicate below mirrors `emit-zig-name`'s own precedence and answers
- True only where that function would fall through to a plain identifier: a
- renamed local, or a bound name that is not a builtin, a constructor, or any
- definition with an arity. Anything that might render as a call keeps its
- discard.
-
- AND THE NAME MUST BE READ ELSEWHERE, which is the second half and was the
- second wrong answer. `const-narrow-proven` is `let _ = n in code-a ()` where
- `n` is a parameter read nowhere else, so its `_ = n;` was the only thing
- keeping zig quiet, and dropping it turned a pointless-discard error into an
- unused-parameter one. `zig-occurs body n` is the rule from the table above,
- stated once.
-
- Found by `roc-alias-original`, whose whole content is a binding nobody reads
- (`x = [1,2,3]  _y = x  ...read x...`). Its twin `roc-alias-list` reads the
- alias and passed, which is what made the pair worth porting.
-
-  zig-name-is-local : ZigCtx, Text -> Boolean
-  zig-name-is-local (ctx) (n) =
-   if text-length (zig-renamed ctx n) > 0 then True
-   else if text-length (zig-lookup-name zig-name-map n 0) > 0 then False
-   else if zig-find-ctor (ctx.ctors) n 0 >= 0 then False
-   else if lookup-arity (ctx.arities) n >= 0 then False
-   else zig-in-texts (ctx.bound-names) n 0
-
-  zig-let-discard : IRExpr, IRExpr, ZigCtx, Integer -> Text
-  zig-let-discard (val) (body) (ctx) (d) =
-   when val
-    is IrName (n) (ty) (sp) ->
-     if zig-name-is-local ctx n & zig-occurs body n
-     then "" else "_ = " & emit-zig-expr val ctx (d + 1) & "; "
-    is otherwise -> "_ = " & emit-zig-expr val ctx (d + 1) & "; "
-
   zig-occurs : IRExpr, Text -> Boolean
   zig-occurs (e) (n) =
    when e
@@ -1556,7 +1498,7 @@ Section: Expression Emission
     is IrLet (name) (ty) (val) (body) (sp) ->
      if zig-is-seq-name name then zig-label d & ": { _ = " & emit-zig-expr val ctx (d + 1) & "; break :" & zig-label d & " " & emit-zig-expr body ctx (d + 1) & "; }"
      else if zig-occurs body name then zig-label d & ": { const " & zig-bind-name ctx name d & zig-let-annot ty & " = " & emit-zig-expr val ctx (d + 1) & "; break :" & zig-label d & " " & emit-zig-expr body (zig-bind-push ctx name d) (d + 1) & "; }"
-     else zig-label d & ": { " & zig-let-discard val body ctx d & "break :" & zig-label d & " " & emit-zig-expr body ctx (d + 1) & "; }"
+     else zig-label d & ": { _ = " & emit-zig-expr val ctx (d + 1) & "; break :" & zig-label d & " " & emit-zig-expr body ctx (d + 1) & "; }"
     is IrApply (f) (a) (ty) (sp) -> emit-zig-apply e ctx d
     is IrLambda (params) (body) (ty) (sp) -> zig-lambda-closure params body ty ctx d
     is IrList (elems) (ty) (sp) -> emit-zig-list elems ty ctx d
@@ -3207,7 +3149,7 @@ Section: Tail Call Loops
      else if zig-occurs body name
      then "const " & zig-bind-name ctx name d & zig-let-annot ty & " = " & emit-zig-expr val ctx (d + 1) & "; "
         & emit-zig-tail body (zig-bind-push ctx name d) (d + 1) tl
-     else zig-let-discard val body ctx d & emit-zig-tail body ctx (d + 1) tl
+     else "_ = " & emit-zig-expr val ctx (d + 1) & "; " & emit-zig-tail body ctx (d + 1) tl
     is IrMatch (scrut) (branches) (ty) (sp) ->
      if zig-branches-guarded branches 0 then zig-tail-return e ctx d
      else "switch (" & emit-zig-expr scrut ctx (d + 1) & zig-match-deref ctx (zig-expr-type scrut) & ") { "
