@@ -1414,9 +1414,20 @@ Section: Expression Emission
  const; a wrongly-kept const fails loudly as unused, never silently.
 
  An unused binding still has to SEQUENCE its value, because the value may do
- work, so it discards rather than vanishing. But `_ = x;` where `x` is a LOCAL
- CONST is itself a zig error -- "pointless discard of local constant" -- and
- zig is right: a local has nothing to sequence.
+ work, so it discards rather than vanishing. But the discard is not always
+ allowed, and zig's actual rule is narrower than it first looks. Measured
+ against zig 0.16 rather than inferred from one error message:
+
+   const x = 7; _ = x;            compiles
+   const x = 7; _ = x; use(x);    error: pointless discard of local constant
+   fn f(n) { _ = n; }             compiles
+   fn f(n) { _ = n; use(n); }     error: pointless discard of function parameter
+   fn f(n) { }                    error: unused function parameter
+
+ **The discard is an error exactly when the name is ALSO read elsewhere**, and
+ that holds for locals and parameters alike. It is not about being a local.
+ When the name is read nowhere else the discard is fine, and for a parameter
+ it is required.
 
  THE TEST IS "IS THIS A LOCAL", NOT "IS THIS AN IrName", and the difference is
  not academic. The first version of this checked for `IrName` and dropped the
@@ -1433,15 +1444,12 @@ Section: Expression Emission
  definition with an arity. Anything that might render as a call keeps its
  discard.
 
- AND THE NAME MUST BE USED ELSEWHERE, which is the second half and was the
- second wrong answer. Zig's two rules point opposite ways: discarding a local
- const is an error, and NOT discarding an unused function parameter is also an
- error. `const-narrow-proven` is `let _ = n in code-a ()` where `n` is a
- parameter used nowhere else, so its `_ = n;` was the only thing keeping zig
- quiet, and dropping it turned a pointless-discard error into an
- unused-parameter one. `zig-occurs body n` separates the two: if the name is
- read elsewhere the discard is genuinely pointless, and if it is not, the
- discard is the only use and has to stay.
+ AND THE NAME MUST BE READ ELSEWHERE, which is the second half and was the
+ second wrong answer. `const-narrow-proven` is `let _ = n in code-a ()` where
+ `n` is a parameter read nowhere else, so its `_ = n;` was the only thing
+ keeping zig quiet, and dropping it turned a pointless-discard error into an
+ unused-parameter one. `zig-occurs body n` is the rule from the table above,
+ stated once.
 
  Found by `roc-alias-original`, whose whole content is a binding nobody reads
  (`x = [1,2,3]  _y = x  ...read x...`). Its twin `roc-alias-list` reads the
