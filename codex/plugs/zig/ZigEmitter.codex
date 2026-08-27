@@ -1433,6 +1433,16 @@ Section: Expression Emission
  definition with an arity. Anything that might render as a call keeps its
  discard.
 
+ AND THE NAME MUST BE USED ELSEWHERE, which is the second half and was the
+ second wrong answer. Zig's two rules point opposite ways: discarding a local
+ const is an error, and NOT discarding an unused function parameter is also an
+ error. `const-narrow-proven` is `let _ = n in code-a ()` where `n` is a
+ parameter used nowhere else, so its `_ = n;` was the only thing keeping zig
+ quiet, and dropping it turned a pointless-discard error into an
+ unused-parameter one. `zig-occurs body n` separates the two: if the name is
+ read elsewhere the discard is genuinely pointless, and if it is not, the
+ discard is the only use and has to stay.
+
  Found by `roc-alias-original`, whose whole content is a binding nobody reads
  (`x = [1,2,3]  _y = x  ...read x...`). Its twin `roc-alias-list` reads the
  alias and passed, which is what made the pair worth porting.
@@ -1445,11 +1455,12 @@ Section: Expression Emission
    else if lookup-arity (ctx.arities) n >= 0 then False
    else zig-in-texts (ctx.bound-names) n 0
 
-  zig-let-discard : IRExpr, ZigCtx, Integer -> Text
-  zig-let-discard (val) (ctx) (d) =
+  zig-let-discard : IRExpr, IRExpr, ZigCtx, Integer -> Text
+  zig-let-discard (val) (body) (ctx) (d) =
    when val
     is IrName (n) (ty) (sp) ->
-     if zig-name-is-local ctx n then "" else "_ = " & emit-zig-expr val ctx (d + 1) & "; "
+     if zig-name-is-local ctx n & zig-occurs body n
+     then "" else "_ = " & emit-zig-expr val ctx (d + 1) & "; "
     is otherwise -> "_ = " & emit-zig-expr val ctx (d + 1) & "; "
 
   zig-occurs : IRExpr, Text -> Boolean
@@ -1537,7 +1548,7 @@ Section: Expression Emission
     is IrLet (name) (ty) (val) (body) (sp) ->
      if zig-is-seq-name name then zig-label d & ": { _ = " & emit-zig-expr val ctx (d + 1) & "; break :" & zig-label d & " " & emit-zig-expr body ctx (d + 1) & "; }"
      else if zig-occurs body name then zig-label d & ": { const " & zig-bind-name ctx name d & zig-let-annot ty & " = " & emit-zig-expr val ctx (d + 1) & "; break :" & zig-label d & " " & emit-zig-expr body (zig-bind-push ctx name d) (d + 1) & "; }"
-     else zig-label d & ": { " & zig-let-discard val ctx d & "break :" & zig-label d & " " & emit-zig-expr body ctx (d + 1) & "; }"
+     else zig-label d & ": { " & zig-let-discard val body ctx d & "break :" & zig-label d & " " & emit-zig-expr body ctx (d + 1) & "; }"
     is IrApply (f) (a) (ty) (sp) -> emit-zig-apply e ctx d
     is IrLambda (params) (body) (ty) (sp) -> zig-lambda-closure params body ty ctx d
     is IrList (elems) (ty) (sp) -> emit-zig-list elems ty ctx d
@@ -3188,7 +3199,7 @@ Section: Tail Call Loops
      else if zig-occurs body name
      then "const " & zig-bind-name ctx name d & zig-let-annot ty & " = " & emit-zig-expr val ctx (d + 1) & "; "
         & emit-zig-tail body (zig-bind-push ctx name d) (d + 1) tl
-     else zig-let-discard val ctx d & emit-zig-tail body ctx (d + 1) tl
+     else zig-let-discard val body ctx d & emit-zig-tail body ctx (d + 1) tl
     is IrMatch (scrut) (branches) (ty) (sp) ->
      if zig-branches-guarded branches 0 then zig-tail-return e ctx d
      else "switch (" & emit-zig-expr scrut ctx (d + 1) & zig-match-deref ctx (zig-expr-type scrut) & ") { "
