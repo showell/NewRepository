@@ -1,0 +1,35 @@
+Chapter: RocAliasBothUsed
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list alias both references used", case 16 in file order:
+
+     { x = [1, 2] y = x a = match x { [first, ..] => first, _ => 0 }
+       b = match y { [first, ..] => first, _ => 0 } a + b }
+
+ and Roc expects 2 -- the same head read twice, 1 + 1.
+
+ The aliasing cluster's strongest member: BOTH names are read, so no discard
+ and no dead binding can hide a sharing bug. If the alias were a copy the
+ answer is still 2, so this does not distinguish sharing from copying -- what
+ it does catch is a backend that invalidates the original when the alias is
+ read, which is the failure an ownership-minded emitter can actually have.
+
+ Adaptations, standing: `list-at` for the rest pattern, `2.0` is `2`.
+
+Section: Functions
+
+  both-used : Integer -> Integer
+  both-used (n) =
+   let x = [1, 2]
+   in let y = x
+   in let a = list-at x 0
+   in let b = list-at y 0
+   in a + b
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (both-used 0))
+  end

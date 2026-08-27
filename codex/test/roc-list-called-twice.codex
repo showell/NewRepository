@@ -1,0 +1,38 @@
+Chapter: RocListCalledTwice
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: function called multiple times with same list", case 20 in file
+ order:
+
+     { f = |lst| lst x = [1, 2] a = f(x) _b = f(x) match a { [first, ..] => first, _ => 0 } }
+
+ and Roc expects 1.
+
+ THE SECOND CONTROL FOR FINDING 60, and the third kind of unread binding the
+ cluster supplies: case 10 discards a bare NAME (which zig refuses), case 13 a
+ LITERAL, and this one a CALL RESULT. A call is the case where the discard is
+ not merely allowed but REQUIRED -- the call may do work, and dropping it would
+ change what runs. Together the three say exactly which values the emitter may
+ stop discarding and which it must not.
+
+ Adaptations, standing: `list-at` for the rest pattern, and `1.0` is `1`.
+
+Section: Functions
+
+  ident2 : List Integer -> List Integer
+  ident2 (lst) = lst
+
+  called-twice : Integer -> Integer
+  called-twice (n) =
+   let x = [1, 2]
+   in let a = ident2 x
+   in let b = ident2 x
+   in list-at a 0
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (called-twice 0))
+  end

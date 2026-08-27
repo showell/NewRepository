@@ -1,0 +1,33 @@
+Chapter: RocAliasEmpty
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list alias empty list aliasing", case 14 in file order:
+
+     { x = [] y = x match y { [] => 42, _ => 0 } }
+
+ and Roc expects 42.
+
+ An EMPTY list bound, then aliased, then read through the alias. It is the
+ aliasing cluster's version of the shape finding 58 is about: an empty literal
+ has no element to answer from, and here nothing downstream constrains it
+ either -- the only thing ever asked of it is its length. So the element type
+ is genuinely unconstrained, which makes this a case where refusing would be
+ honest and answering is better.
+
+ Adaptations, standing: `list-length` for the pattern, and `42.0` is `42`.
+
+Section: Functions
+
+  alias-empty : Integer -> Integer
+  alias-empty (n) =
+   let x = []
+   in let y = x
+   in if list-length y == 0 then 42 else 0
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (alias-empty 0))
+  end

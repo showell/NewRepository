@@ -1,0 +1,32 @@
+Chapter: RocListIdentity
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list through identity function", case 17 in file order:
+
+     { id = |lst| lst x = [1, 2] result = id(x) match result { [a, b] => a + b, _ => 0 } }
+
+ and Roc expects 3.
+
+ A list through a POLYMORPHIC identity. `id : List a -> List a` is the
+ smallest definition whose type argument has to survive a call, so this is the
+ aliasing cluster shading into the monomorphisation question: the definition
+ is generic and the call site is not.
+
+Section: Functions
+
+  ident : List Integer -> List Integer
+  ident (lst) = lst
+
+  through-id : Integer -> Integer
+  through-id (n) =
+   let x = [1, 2]
+   in let result = ident x
+   in list-at result 0 + list-at result 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (through-id 0))
+  end

@@ -1,0 +1,36 @@
+Chapter: RocAliasIndependent
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list alias multiple independent lists", case 13 in file order:
+
+     { x = [1, 2] _y = [3, 4] match x { [a, b] => a + b, _ => 0 } }
+
+ and Roc expects 3.
+
+ THE CONTROL FOR FINDING 60, and it is why this one is worth porting rather
+ than skipping as a near-duplicate of case 10. Both have a binding nobody
+ reads. In case 10 that binding's value is a BARE NAME, and the emitter's
+ discard of it (`_ = x;`) is what zig refuses as a pointless discard of a local
+ constant. Here the value is a LIST LITERAL, so the discard is of a call
+ result, which zig accepts. The pair says the defect is about what is being
+ discarded and not about unused bindings in general.
+
+ Adaptations, standing: no list patterns, so `list-at`; Roc's `3.0` is `3`;
+ Roc's `_y` discard sigil has no Codex spelling, so the binding is named and
+ simply not read.
+
+Section: Functions
+
+  independent : Integer -> Integer
+  independent (n) =
+   let x = [1, 2]
+   in let y = [3, 4]
+   in list-at x 0 + list-at x 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (independent 0))
+  end

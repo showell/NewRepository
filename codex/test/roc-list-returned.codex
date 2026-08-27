@@ -1,0 +1,32 @@
+Chapter: RocListReturned
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list returned from function", case 18 in file order:
+
+     { f = |_| [1, 2] result = f(0) match result { [a, b] => a + b, _ => 0 } }
+
+ and Roc expects 3.
+
+ A list BUILT INSIDE a function and returned, rather than passed in. The
+ difference from case 17 is where the list is allocated relative to the frame
+ that reads it, which for a backend with real memory is the whole question.
+ Its sibling case 19 -- a closure CAPTURING a list and returning it -- is
+ already ported as `roc-closure-captures-list`, and that one raised H2.
+
+Section: Functions
+
+  make-list : Integer -> List Integer
+  make-list (ignored) = [1, 2]
+
+  returned : Integer -> Integer
+  returned (n) =
+   let result = make-list 0
+   in list-at result 0 + list-at result 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (returned 0))
+  end
