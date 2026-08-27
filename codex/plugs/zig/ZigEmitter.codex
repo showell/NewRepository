@@ -1175,7 +1175,7 @@ Section: Name Mapping
        in let base = if boxed then zig-sanitize (c.type-name) & "S" else zig-sanitize (c.type-name) & zig-ctor-type-args ty (ctx.scope-tvars)
        in if boxed then "cx_new(" & base & "{ ." & zig-sanitize n & " = {} })"
           else base & "{ ." & zig-sanitize n & " = {} }"
-   else if lookup-arity (ctx.arities) n == 0 then zig-sanitize n & "()"
+   else if lookup-arity (ctx.arities) n == 0 then zig-sanitize n & "(" & zig-call-type-args ctx n [] ty & ")"
    else if lookup-arity (ctx.arities) n >= 1 & zig-fn-param-count ty >= 1
    then zig-closure-make n [] ctx d ty
    else if zig-name-known ctx n then zig-sanitize n
@@ -2528,6 +2528,23 @@ Section: Apply Emission
    if i >= list-length defs then -1
    else if (list-at defs i).name == n then i
    else zig-find-irdef defs (i + 1) n
+
+ A NULLARY definition is reached through emit-zig-name, not through the apply
+ path, because with no arguments there is no IrApply node to carry them. It
+ was emitted as a bare `n()` and so was the one call shape that never asked
+ for its type arguments: `hamt_empty()` against
+ `fn hamt_empty(comptime T58: type) HamtMap(T58)`, which zig reports as
+ `expected 1 argument(s), found 0`.
+
+ Nothing new is needed to answer it. `zig-resolve-tvar-type` already falls
+ back to matching the declared RETURN type against the call's actual result
+ when it runs out of parameters, which for a nullary definition is
+ immediately, and `emit-zig-name` is already handed the instantiated type at
+ the use site -- `(ctd "HamtMap" (args int-default))` for the call above. The
+ arity-0 branch just never asked.
+
+ `zig-call-type-args` answers "" for a definition with no type parameters, so
+ an ordinary nullary call still emits `n()` exactly as before.
 
   zig-call-type-args : ZigCtx, Text, List CodexType, CodexType -> Text
   zig-call-type-args (ctx) (n) (actuals) (resty) =
