@@ -1445,6 +1445,22 @@ Section: Document Desugaring
    in if token-text (cd.name) == class-name then cd.superclass
       else class-superclass-of cds class-name (i + 1) len
 
+ An instance method's lambda carries the method NAME's span, not a synthetic
+ one. It is the same fact as COMPILER-30: a lambda filed under file-id 0 is
+ filed nowhere, so `record-expr-type` stores nothing for it and
+ `lambda-expected-ty` can never find the type the checker solved.
+
+ COMPILER-30 fixed the lambda the PARSER builds and deliberately left the two
+ the DESUGARER builds, because the matrix did not measure them. This one is
+ measured now: `typeclass-smoke` and `typeclass-poly` both refuse, and their
+ method lambdas show the disagreement in one node --
+
+   (def "__lam_2" (params (param "b" (tvar 16))) (fn (tvar 16) text)
+     (if (name "b" boolean) ...))
+
+ the parameter cell saying `tvar 16` while the body types the same name
+ `boolean`. `m.name` is a real token and was always available.
+
   synth-instance-fields : List InstanceMethodDef, Integer, Integer, List AFieldExpr -> List AFieldExpr
   synth-instance-fields (ms) (i) (len) (acc) =
    if i >= len then acc
@@ -1452,7 +1468,7 @@ Section: Document Desugaring
    in let params = for p in (m.params) -> make-name (token-text p)
    in let lam-body = desugar-expr (m.body)
    in let field-val = if list-length params == 0 then lam-body
-    else deck-record (ALambdaExpr params lam-body synthetic-span)
+    else deck-record (ALambdaExpr params lam-body (token-span (m.name)))
    in let field = deck-record (AFieldExpr {
     name = make-name (token-text (m.name) & "-impl"),
     value = field-val,
