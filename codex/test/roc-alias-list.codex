@@ -1,0 +1,34 @@
+Chapter: RocAliasList
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list alias variable aliasing", case 9 in file order:
+
+     { x = [1, 2, 3] y = x match y { [a, b, c] => a + b + c, _ => 0 } }
+
+ and Roc expects 6.
+
+ The first of a cluster Roc keeps eleven of (cases 9 to 20), all asking the
+ same question a different way: when a list is bound to a SECOND name, do both
+ names see the same list, and does reading one disturb the other? For an
+ interpreter that is a refcount question. For a zig backend it is a sharing
+ question -- `CxList` is a pointer, and a port that passes here while
+ `roc-alias-original` fails would say the alias got a copy it should not have.
+
+ Adaptations: Codex has no list patterns in `when`, so the read is `list-at`;
+ Roc's literals print `6.0` where Codex Integer prints `6`.
+
+Section: Functions
+
+  alias-read : Integer -> Integer
+  alias-read (n) =
+   let x = [1, 2, 3]
+   in let y = x
+   in list-at y 0 + list-at y 1 + list-at y 2
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (alias-read 0))
+  end

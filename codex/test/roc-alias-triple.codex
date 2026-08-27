@@ -1,0 +1,32 @@
+Chapter: RocAliasTriple
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list alias triple aliasing", case 11 in file order:
+
+     { x = [1, 2] y = x z = y match z { [a, b] => a + b, _ => 0 } }
+
+ and Roc expects 3.
+
+ The same question as `roc-alias-list` one link further down the chain: an
+ alias OF an alias. It is here because Roc keeps it, and because a backend
+ that flattens `z` straight to `x` and a backend that walks `z -> y -> x` are
+ both correct and only one of them is what ours does.
+
+ Adaptations: list patterns become `list-at`, and Roc's `3.0` is Codex's `3`.
+
+Section: Functions
+
+  alias-triple : Integer -> Integer
+  alias-triple (n) =
+   let x = [1, 2]
+   in let y = x
+   in let z = y
+   in list-at z 0 + list-at z 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (alias-triple 0))
+  end

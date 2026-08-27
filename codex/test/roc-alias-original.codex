@@ -1,0 +1,37 @@
+Chapter: RocAliasOriginal
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list alias return original after aliasing", case 10 in file order:
+
+     { x = [1, 2, 3] _y = x match x { [a, b, c] => a + b + c, _ => 0 } }
+
+ and Roc expects 6.
+
+ The CONTROL for `roc-alias-list`, and Roc keeps both. Same two bindings, same
+ list, same answer; the one respect that differs is WHICH NAME is read. If the
+ alias is a copy rather than a share, one of the pair still passes and the
+ other does not, which is why the pair is worth more than either half.
+
+ Roc marks the unread binding `_y`; Codex has no discard sigil for a `let`, so
+ the binding is named plainly and simply not read. That is the one adaptation
+ with any content in it -- an unused `let` is a thing a backend may drop
+ entirely, and dropping it is exactly what this case is checking does not
+ change the answer.
+
+ Adaptations otherwise: list patterns become `list-at`, and `6.0` is `6`.
+
+Section: Functions
+
+  alias-original : Integer -> Integer
+  alias-original (n) =
+   let x = [1, 2, 3]
+   in let y = x
+   in list-at x 0 + list-at x 1 + list-at x 2
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (alias-original 0))
+  end
