@@ -1,0 +1,35 @@
+Chapter: RocClosureCapturesTextList
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: closure captures string list", case 23 in file order:
+
+     { x = ["captured", "list"] f = |_| x result = f(0) match result { [first, ..] => first, _ => "" } }
+
+ and Roc expects "captured".
+
+ THE TEXT TWIN OF THE PORT THAT RAISED H2. Case 19 is the same program with
+ Integer elements and is `roc-closure-captures-list`, whose refusal started
+ the whole lambda-parameter thread. This one matters for the reason matrix
+ case f matters: every H2 case whose true answer is `Integer` can be passed by
+ a backend that is defaulting rather than recovering, and only a `Text` tells
+ the two apart. If the Integer twin passes and this one does not, whatever
+ recovered the type recovered the DEFAULT.
+
+ ADAPTATION: Roc prints an inspected string with quotes; `print-line-uni`
+ prints the text. The `.expected` is `captured`.
+
+Section: Functions
+
+  capture-text : Integer -> Text
+  capture-text (n) =
+   let x = ["captured", "list"]
+   in let f = \ignored -> x
+   in list-at (f 0) 0
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (capture-text 0)
+  end

@@ -1,0 +1,47 @@
+Chapter: RocMutableReassign
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: list alias mutable reassignment", case 12 in file order:
+
+     { var $x = [1, 2] $x = [3, 4] match $x { [a, b] => a + b, _ => 0 } }
+
+ and Roc expects 7.
+
+ THE ONE ADAPTATION THAT IS NOT A STANDING ONE, and it is why cases 12 and 15
+ sat deferred rather than being ported with the rest of the aliasing cluster.
+
+ **Codex has no mutable LOCAL.** `mutable` is a property of a type
+ declaration -- `mutable Box = record { n : Integer }` -- and mutation happens
+ through a field of such a record. There is no `var` binding form; the
+ language has no spelling for Roc's `var $x`.
+
+ So the mutable location becomes a mutable record field. That is a real change
+ of shape and not a rename: Roc rebinds a local, this stores into a heap cell.
+ What survives is the whole of what the case asks -- a location holding a
+ list, overwritten with a different list, then read -- and for a backend with
+ real memory the record version is the harder of the two, because the old list
+ must stay reachable long enough to be replaced and no longer.
+
+ The remaining adaptations are standing: no list patterns, so `list-at`, and
+ Roc's `7.0` is Codex's `7`.
+
+Section: Types
+
+  mutable Cell = record {
+   lst : List Integer
+  }
+
+Section: Functions
+
+  reassign : mutable Cell -> Integer
+  reassign (c) =
+    c.lst = [3, 4]
+    list-at (c.lst) 0 + list-at (c.lst) 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (reassign (Cell { lst = [1, 2] })))
+  end

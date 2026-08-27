@@ -1,0 +1,33 @@
+Chapter: RocTupleTwoLists
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: multiple lists in tuple", case 28 in file order:
+
+     { x = [1, 2] y = [3, 4] t = (x, y) match t { (first, _) => match first { [a, b] => a + b, _ => 0 } } }
+
+ and Roc expects 3.
+
+ THE CONTROL FOR `roc-tuple-same-list-twice`, and Roc keeps both. Same tuple,
+ same read of the same position, same answer; the one respect that differs is
+ whether the two slots hold the SAME list or two different ones. A backend
+ that shares when it should copy, or copies when it should share, moves one of
+ the pair and not the other.
+
+ Adaptations: `list-at` for the list pattern, `3.0` is `3`.
+
+Section: Functions
+
+  read-two : Integer -> Integer
+  read-two (n) =
+   let x = [1, 2]
+   in let y = [3, 4]
+   in let (first, second) = (x, y)
+   in list-at first 0 + list-at first 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (read-two 0))
+  end

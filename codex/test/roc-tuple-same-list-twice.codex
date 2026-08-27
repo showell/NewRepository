@@ -1,0 +1,38 @@
+Chapter: RocTupleSameListTwice
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: function returns tuple with same list twice", case 25 in file
+ order:
+
+     { make_pair = |lst| (lst, lst) x = [1, 2] t = make_pair(x) match t { (first, _) => match first { [a, b] => a + b, _ => 0 } } }
+
+ and Roc expects 3.
+
+ The aliasing question moved inside a TUPLE: one list reaching two positions
+ of a returned pair. For an interpreter that is a refcount question; for a
+ backend with real memory it asks whether the two slots share a pointer and
+ whether returning the pair keeps the list alive.
+
+ Codex has tuples -- the desugarer builds them as `MkTupN` -- and destructures
+ them in a `let`, which is how the compiler's own source reads them
+ (`let (lam-row, lam-st) = ...`). Adaptations otherwise standing: `list-at`
+ for the list pattern, and Roc's `3.0` is Codex's `3`.
+
+Section: Functions
+
+  make-pair : List Integer -> (List Integer, List Integer)
+  make-pair (lst) = (lst, lst)
+
+  read-pair : Integer -> Integer
+  read-pair (n) =
+   let x = [1, 2]
+   in let (first, second) = make-pair x
+   in list-at first 0 + list-at first 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (read-pair 0))
+  end

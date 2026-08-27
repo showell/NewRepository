@@ -1,0 +1,37 @@
+Chapter: RocTextListThroughFn
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: string list through function", case 21 in file order:
+
+     { f = |lst| lst x = ["a", "b"] result = f(x) match result { [first, ..] => first, _ => "" } }
+
+ and Roc expects "a".
+
+ Case 17's shape with a TEXT element instead of an Integer one, and Roc keeps
+ both. The distinction is the same one matrix case f exists for: Integer is
+ the language's default, so an Integer element can be answered correctly by a
+ backend that is merely defaulting. Text cannot.
+
+ ADAPTATION worth naming: Roc's harness prints an inspected string WITH its
+ quotes (`"a"`), Codex's `print-line-uni` prints the text itself. The
+ `.expected` here is `a`, and that is a difference in the harness rather than
+ in the answer.
+
+Section: Functions
+
+  ident-text : List Text -> List Text
+  ident-text (lst) = lst
+
+  through : Integer -> Text
+  through (n) =
+   let x = ["a", "b"]
+   in let result = ident-text x
+   in list-at result 0
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (through 0)
+  end
