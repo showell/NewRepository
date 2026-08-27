@@ -1414,20 +1414,42 @@ Section: Expression Emission
  const; a wrongly-kept const fails loudly as unused, never silently.
 
  An unused binding still has to SEQUENCE its value, because the value may do
- work, so it discards rather than vanishing. But `_ = x;` where `x` is a local
- const is itself a zig error -- "pointless discard of local constant" -- and
- zig is right: a bare name has nothing to sequence. So a discard of a plain
- name emits NOTHING, and everything else still discards.
+ work, so it discards rather than vanishing. But `_ = x;` where `x` is a LOCAL
+ CONST is itself a zig error -- "pointless discard of local constant" -- and
+ zig is right: a local has nothing to sequence.
+
+ THE TEST IS "IS THIS A LOCAL", NOT "IS THIS AN IrName", and the difference is
+ not academic. The first version of this checked for `IrName` and dropped the
+ discard for any of them. An `IrName` whose arity is 0 is emitted by
+ `emit-zig-name` as `zig-sanitize n & "()"` -- a CALL -- so dropping its
+ discard drops an effect. `deck-bracket-contract` went from `match` to
+ `differ`, a wrong answer, because `_ = cx_deck_enter();` stopped being
+ emitted. A refusal would have been survivable; a silently wrong deck bracket
+ count is exactly what this tree exists to catch.
+
+ So the predicate below mirrors `emit-zig-name`'s own precedence and answers
+ True only where that function would fall through to a plain identifier: a
+ renamed local, or a bound name that is not a builtin, a constructor, or any
+ definition with an arity. Anything that might render as a call keeps its
+ discard.
 
  Found by `roc-alias-original`, whose whole content is a binding nobody reads
  (`x = [1,2,3]  _y = x  ...read x...`). Its twin `roc-alias-list` reads the
- alias and passed, which is what made the pair worth porting: one half of a
- control pair failing is the signal.
+ alias and passed, which is what made the pair worth porting.
+
+  zig-name-is-local : ZigCtx, Text -> Boolean
+  zig-name-is-local (ctx) (n) =
+   if text-length (zig-renamed ctx n) > 0 then True
+   else if text-length (zig-lookup-name zig-name-map n 0) > 0 then False
+   else if zig-find-ctor (ctx.ctors) n 0 >= 0 then False
+   else if lookup-arity (ctx.arities) n >= 0 then False
+   else zig-in-texts (ctx.bound-names) n 0
 
   zig-let-discard : IRExpr, ZigCtx, Integer -> Text
   zig-let-discard (val) (ctx) (d) =
    when val
-    is IrName (n) (ty) (sp) -> ""
+    is IrName (n) (ty) (sp) ->
+     if zig-name-is-local ctx n then "" else "_ = " & emit-zig-expr val ctx (d + 1) & "; "
     is otherwise -> "_ = " & emit-zig-expr val ctx (d + 1) & "; "
 
   zig-occurs : IRExpr, Text -> Boolean
