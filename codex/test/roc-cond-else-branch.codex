@@ -1,0 +1,34 @@
+Chapter: RocCondElseBranch
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: conditional chooses list from else branch":
+
+     { x = [1, 2] result = if False {x} else {[3, 4]} match result { [a, b] => a + b, _ => 0 } }
+
+ and Roc expects 7.
+
+ The CONTROL for `roc-cond-empty-branch`, and Roc keeps both. Same shape --
+ a branch choosing between two lists -- with the one respect that neither arm
+ is empty, so a join that fails here fails for a reason that has nothing to do
+ with empty literals. Roc also ships the then-branch twin ("conditional
+ chooses list from then branch", expecting 3); this batch takes the else side
+ because a bound name losing to a literal is the harder direction.
+
+ Adaptations: list patterns become `list-at`, and Roc's `7.0` is Codex's `7`.
+ Both are the standing ones.
+
+Section: Functions
+
+  cond-else : Integer -> Integer
+  cond-else (n) =
+   let x = [1, 2]
+   in let result = if False then x else [3, 4]
+   in list-at result 0 + list-at result 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (cond-else 0))
+  end

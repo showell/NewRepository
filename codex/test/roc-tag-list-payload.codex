@@ -1,0 +1,42 @@
+Chapter: RocTagListPayload
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: tag with list payload". The whole Roc case:
+
+     match Some([1, 2]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
+
+ and Roc expects 3.
+
+ A LIST INSIDE A TAG PAYLOAD, read back out by matching the tag. Roc's `Some`
+ is a structural tag needing no declaration; Codex wants a declared sum type,
+ so the port declares one. That is the adaptation with the most in it and it
+ is named here rather than buried: the Codex version tests a payload of a
+ DECLARED parametric type, which is a stronger statement than Roc's, not a
+ weaker one -- a declared `Holder (a)` is exactly the shape whose type
+ argument a substitution walk has to be able to see into.
+
+ The constructor is `Held`/`Nothing-Held` rather than `Some`/`None` because
+ `Some` is already spoken for in the depot's own tests and shadowing it would
+ test the name.
+
+ Adaptations: list patterns become `list-at`, and Roc's `3.0` is Codex's `3`.
+
+Section: Types
+
+  Holder (a) = | Held (a) | NotHeld
+
+Section: Functions
+
+  read-held : Holder (List Integer) -> Integer
+  read-held (h) =
+   when h
+    is Held (lst) -> list-at lst 0 + list-at lst 1
+    is NotHeld -> 0
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (read-held (Held [1, 2])))
+  end

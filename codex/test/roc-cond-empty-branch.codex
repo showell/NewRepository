@@ -1,0 +1,38 @@
+Chapter: RocCondEmptyBranch
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: conditional empty list branch". The whole Roc case is one line:
+
+     { result = if True {[]} else {[1, 2]} match result { [] => 42, _ => 0 } }
+
+ and Roc expects 42.
+
+ Chosen because it puts an EMPTY LIST LITERAL in one arm of a branch whose
+ other arm is concrete, which is the join of the two things this tree changed
+ today: an empty literal has no element to answer from, and a branch has to
+ agree on a type its arms may each know only half of.
+
+ Two adaptations, both standing ones this batch does not invent.
+
+ LIST PATTERNS. Codex has no list patterns in `when`, so `match result { []
+ => 42, _ => 0 }` is `list-length`. Every existing port makes the same
+ substitution; it is the shape of the test that matters, not the spelling of
+ the read.
+
+ THE DECIMAL. Roc's numeric literals default to a decimal type and its
+ harness prints `42.0`; Codex Integer prints `42`.
+
+Section: Functions
+
+  cond-empty : Integer -> Integer
+  cond-empty (n) =
+   let result = if True then [] else [1, 2]
+   in if list-length result == 0 then 42 else 0
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (cond-empty 0))
+  end

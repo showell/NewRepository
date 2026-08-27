@@ -1,0 +1,33 @@
+Chapter: RocNestedList
+  cites Foreword chapter Console
+
+ Ported from roc-lang/roc, src/eval/test/eval_closure_recursion_tests.zig,
+ "inspect: simple nested list":
+
+     { inner = [1, 2] outer = [inner] match outer { [lst] => match lst { [a, b] => a + b, _ => 0 }, _ => 0 } }
+
+ and Roc expects 3.
+
+ A LIST WHOSE ELEMENT IS ITSELF A LIST, which is the smallest program where
+ an element type is a container rather than a scalar. Roc keeps a long tail of
+ these -- two levels, three levels, inline, aliased, empty inner -- and this
+ is the first of them; the tail is worth porting only if this one is
+ interesting.
+
+ Adaptations: list patterns become `list-at`, and Roc's `3.0` is Codex's `3`.
+
+Section: Functions
+
+  nested : Integer -> Integer
+  nested (n) =
+   let inner = [1, 2]
+   in let outer = [inner]
+   in let got = list-at outer 0
+   in list-at got 0 + list-at got 1
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   print-line-uni (show (nested 0))
+  end
