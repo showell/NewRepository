@@ -921,14 +921,14 @@ Section: IR Dead Code Elimination
   ir-tdce-def-refs : ATypeDef, List Text -> List Text
   ir-tdce-def-refs (td) (acc) =
    when td
-    is ARecordTypeDef (n) (tvars) (fields) (linear) (sp) -> ir-tdce-rfields fields 0 acc
+    is ARecordTypeDef (n) (tvars) (fields) (is-mut) (sp) -> ir-tdce-rfields fields 0 acc
     is AVariantTypeDef (n) (tvars) (ctors) (sp) -> ir-tdce-vctors ctors 0 acc
     is AUnitTypeDef (n) (inner) (sp) -> ir-tdce-atype inner acc
 
   ir-tdce-def-name : ATypeDef -> Text
   ir-tdce-def-name (td) =
    when td
-    is ARecordTypeDef (n) (tvars) (fields) (linear) (sp) -> n.value
+    is ARecordTypeDef (n) (tvars) (fields) (is-mut) (sp) -> n.value
     is AVariantTypeDef (n) (tvars) (ctors) (sp) -> n.value
     is AUnitTypeDef (n) (inner) (sp) -> n.value
 
