@@ -717,6 +717,296 @@ Section: IR Dead Code Elimination
          else ir-dbp-loop all-defs kept (i + 1) j acc
     else ir-dbp-loop all-defs kept (i + 1) j acc
 
+
+ TYPE-DEFS ARE NOT PRUNED, and they travel to every plug whole. `emit-ir-cce`
+ hands `ir-prune-unreachable-roots` the defs and threads `fe.type-defs` PAST
+ it, so a chapter's every declared type reaches the wire whether the program
+ mentions it or not. `Foreword Tuple` rides into every unit unconditionally,
+ which is why `Tup2..Tup5` are emitted into programs that name none of them:
+ measured over 578 emitted corpus programs, 2,398 of 2,779 type constructors
+ are dead on arrival -- 86%, about 357 KB -- and Tup2..Tup5 are 2,282 of them.
+
+ This is the same shape as the def prune and deliberately NOT the same code.
+ It could have been folded into `ir-dce-collect-expr`, which already visits
+ every node and has each node's type in hand before discarding it -- one walk
+ instead of two. That is the better engineering and the worse change: 47 call
+ sites inside a prune that works and that every emitted program depends on.
+ This adds and modifies nothing. If the second walk ever shows up in a
+ measurement, merge them then, with the measurement in hand.
+
+ The walk is in two halves because the roots and the edges live in different
+ languages. Roots come from the IR, where a named type is `SumTy`, `RecordTy`,
+ `ConstructedTy`, `UnitTy` or `TypeCon`; edges come from the AST type-defs,
+ where they are `ANamedType` inside an `ATypeExpr`. Both halves over-collect
+ rather than under-collect, which keeps a type nobody needed instead of
+ dropping one somebody did.
+
+  ir-tdce-type : CodexType, List Text -> List Text
+  ir-tdce-type (ty) (acc) =
+   when ty
+    is FunTy (p) (row) (r) -> ir-tdce-type r (ir-tdce-type p acc)
+    is ListTy (elem) -> ir-tdce-type elem acc
+    is LinkedListTy (elem) -> ir-tdce-type elem acc
+    is ForAllTy (id) (body) -> ir-tdce-type body acc
+    is ForAllEff (id) (body) -> ir-tdce-type body acc
+    is SumTy (name) (args) (ctors) ->
+      let a1 = list-push acc (name.value)
+      in ir-tdce-ctors ctors 0 (ir-tdce-type-list args 0 a1)
+    is RecordTy (name) (args) (fields) ->
+      let a1 = list-push acc (name.value)
+      in ir-tdce-fields fields 0 (ir-tdce-type-list args 0 a1)
+    is ConstructedTy (name) (args) -> ir-tdce-type-list args 0 (list-push acc (name.value))
+    is EffectfulTy (effs) (sc) (ret) -> ir-tdce-type ret acc
+    is UnitTy (name) (inner) -> ir-tdce-type inner (list-push acc (name.value))
+    is VectorTy (n) (t) -> ir-tdce-type t acc
+    is LinearTy (linner) -> ir-tdce-type linner acc
+    is PropEqTy (a) (b) -> ir-tdce-type b (ir-tdce-type a acc)
+    is TypeCon (n) -> list-push acc (n.value)
+    is TypeApply (tf) (ta) -> ir-tdce-type ta (ir-tdce-type tf acc)
+    is otherwise -> acc
+
+  ir-tdce-type-list : List CodexType, Integer, List Text -> List Text
+  ir-tdce-type-list (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else ir-tdce-type-list xs (i + 1) (ir-tdce-type (list-at xs i) acc)
+
+  ir-tdce-ctors : List SumCtor, Integer, List Text -> List Text
+  ir-tdce-ctors (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let c = list-at xs i
+   in ir-tdce-ctors xs (i + 1) (ir-tdce-type-list (c.fields) 0 acc)
+
+  ir-tdce-fields : List RecordField, Integer, List Text -> List Text
+  ir-tdce-fields (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let f = list-at xs i
+   in ir-tdce-fields xs (i + 1) (ir-tdce-type (f.type-val) acc)
+
+ The IR half. Every IRExpr node carries its type and this reads it; the
+ structure mirrors `ir-dce-collect-expr` arm for arm, so a constructor added
+ there without a matching arm here fails to compile rather than silently
+ dropping a type.
+
+  ir-tdce-expr : IRExpr, List Text -> List Text
+  ir-tdce-expr (e) (acc) =
+   when e
+    is IrIntLit (n) (sp) | IrNumLit (n) (sp) -> acc
+    is IrTextLit (s) (sp) -> acc
+    is IrBoolLit (b) (sp) | IrCharLit (c) (sp) -> acc
+    is IrName (n) (ty) (sp) -> ir-tdce-type ty acc
+    is IrBinary (op) (l) (r) (ty) (sp) -> ir-tdce-expr r (ir-tdce-expr l (ir-tdce-type ty acc))
+    is IrNegate (x) (ty) (sp) -> ir-tdce-expr x (ir-tdce-type ty acc)
+    is IrIf (c) (t) (el) (ty) (sp) ->
+      let a1 = ir-tdce-type ty acc
+      in ir-tdce-expr el (ir-tdce-expr t (ir-tdce-expr c a1))
+    is IrLet (n) (ty) (v) (b) (sp) -> ir-tdce-expr b (ir-tdce-expr v (ir-tdce-type ty acc))
+    is IrApply (f) (a) (ty) (sp) -> ir-tdce-expr a (ir-tdce-expr f (ir-tdce-type ty acc))
+    is IrLambda (ps) (body) (ty) (sp) -> ir-tdce-expr body (ir-tdce-params ps 0 (ir-tdce-type ty acc))
+    is IrList (es) (ty) (sp) -> ir-tdce-expr-list es 0 (ir-tdce-type ty acc)
+    is IrMatch (sc) (bs) (ty) (sp) ->
+      let a1 = ir-tdce-type ty acc
+      in ir-tdce-branches bs 0 (ir-tdce-expr sc a1)
+    is IrAct (ss) (ty) (sp) -> ir-tdce-stmts ss 0 (ir-tdce-type ty acc)
+    is IrHandle (eff) (h) (cs) (ty) (sp) ->
+      let a1 = ir-tdce-type ty acc
+      in ir-tdce-clauses cs 0 (ir-tdce-expr h a1)
+    is IrWithTimeout (secs) (effs) (scopes) (body) (ty) (sp) -> ir-tdce-expr body (ir-tdce-type ty acc)
+    is IrRecord (n) (fs) (ty) (sp) -> ir-tdce-fieldvals fs 0 (ir-tdce-type ty (list-push acc n))
+    is IrFieldAccess (r) (f) (ty) (sp) -> ir-tdce-expr r (ir-tdce-type ty acc)
+    is IrFieldStore (r) (f) (v) (ty) (sp) -> ir-tdce-expr v (ir-tdce-expr r (ir-tdce-type ty acc))
+    is IrTry (max) (body) (fb) (fail) (ty) (sp) ->
+      let a1 = ir-tdce-stmts body 0 (ir-tdce-type ty acc)
+      in ir-tdce-stmts fail 0 (ir-tdce-stmts fb 0 a1)
+    is IrFork (b) (ty) (sp) -> ir-tdce-expr b (ir-tdce-type ty acc)
+    is IrAwait (t) (ty) (sp) -> ir-tdce-expr t (ir-tdce-type ty acc)
+    is IrError (m) (ty) (sp) -> ir-tdce-type ty acc
+
+  ir-tdce-expr-list : List IRExpr, Integer, List Text -> List Text
+  ir-tdce-expr-list (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else ir-tdce-expr-list xs (i + 1) (ir-tdce-expr (list-at xs i) acc)
+
+  ir-tdce-params : List IRParam, Integer, List Text -> List Text
+  ir-tdce-params (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let p = list-at xs i
+   in ir-tdce-params xs (i + 1) (ir-tdce-type (p.type-val) acc)
+
+  ir-tdce-branches : List IRBranch, Integer, List Text -> List Text
+  ir-tdce-branches (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let b = list-at xs i
+   in let a1 = ir-tdce-pat (b.pattern) acc
+   in ir-tdce-branches xs (i + 1) (ir-tdce-expr (b.guard) (ir-tdce-expr (b.body) a1))
+
+  ir-tdce-pat : IRPat, List Text -> List Text
+  ir-tdce-pat (p) (acc) =
+   when p
+    is IrVarPat (name) (ty) (sp) -> ir-tdce-type ty acc
+    is IrLitPat (text) (ty) (sp) -> ir-tdce-type ty acc
+    is IrCtorPat (name) (subs) (ty) (sp) -> ir-tdce-pat-list subs 0 (ir-tdce-type ty acc)
+    is IrWildPat (sp) -> acc
+    is IrVecPat (subs) (ty) (sp) -> ir-tdce-pat-list subs 0 (ir-tdce-type ty acc)
+    is otherwise -> acc
+
+  ir-tdce-pat-list : List IRPat, Integer, List Text -> List Text
+  ir-tdce-pat-list (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else ir-tdce-pat-list xs (i + 1) (ir-tdce-pat (list-at xs i) acc)
+
+  ir-tdce-stmts : List IRActStmt, Integer, List Text -> List Text
+  ir-tdce-stmts (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else ir-tdce-stmts xs (i + 1) (ir-tdce-stmt (list-at xs i) acc)
+
+  ir-tdce-stmt : IRActStmt, List Text -> List Text
+  ir-tdce-stmt (s) (acc) =
+   when s
+    is IrDoBind (n) (ty) (v) (sp) -> ir-tdce-expr v (ir-tdce-type ty acc)
+    is IrDoExec (e) (sp) -> ir-tdce-expr e acc
+
+  ir-tdce-clauses : List IRHandleClause, Integer, List Text -> List Text
+  ir-tdce-clauses (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let c = list-at xs i
+   in ir-tdce-clauses xs (i + 1) (ir-tdce-expr (c.body) acc)
+
+  ir-tdce-fieldvals : List IRFieldVal, Integer, List Text -> List Text
+  ir-tdce-fieldvals (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let f = list-at xs i
+   in ir-tdce-fieldvals xs (i + 1) (ir-tdce-expr (f.value) acc)
+
+  ir-tdce-defs : List IRDef, Integer, List Text -> List Text
+  ir-tdce-defs (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let d = list-at xs i
+   in let a1 = ir-tdce-type (d.type-val) acc
+   in let a2 = ir-tdce-params (d.params) 0 a1
+   in ir-tdce-defs xs (i + 1) (ir-tdce-expr (d.body) a2)
+
+ The AST half: what one type-def names, so a kept type drags in what it needs.
+
+  ir-tdce-atype : ATypeExpr, List Text -> List Text
+  ir-tdce-atype (t) (acc) =
+   when t
+    is ANamedType (n) (sp) -> list-push acc (n.value)
+    is AFunType (a) (b) (sp) -> ir-tdce-atype b (ir-tdce-atype a acc)
+    is AAppType (f) (args) (sp) -> ir-tdce-atype-list args 0 (ir-tdce-atype f acc)
+    is AEffectType (effs) (sc) (regs) (inner) (sp) -> ir-tdce-atype inner acc
+    is ABoundedIntType (inner) (lo) (hi) (mode) (sp) -> ir-tdce-atype inner acc
+    is APropEqType (a) (b) (sp) -> ir-tdce-atype b (ir-tdce-atype a acc)
+    is AConstrainedType (cls) (v) (inner) (sp) -> ir-tdce-atype inner acc
+    is ALinearType (inner) (sp) -> ir-tdce-atype inner acc
+    is otherwise -> acc
+
+  ir-tdce-atype-list : List ATypeExpr, Integer, List Text -> List Text
+  ir-tdce-atype-list (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else ir-tdce-atype-list xs (i + 1) (ir-tdce-atype (list-at xs i) acc)
+
+  ir-tdce-rfields : List ARecordFieldDef, Integer, List Text -> List Text
+  ir-tdce-rfields (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let f = list-at xs i
+   in ir-tdce-rfields xs (i + 1) (ir-tdce-atype (f.type-expr) acc)
+
+  ir-tdce-vctors : List AVariantCtorDef, Integer, List Text -> List Text
+  ir-tdce-vctors (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else let c = list-at xs i
+   in let a1 = ir-tdce-atype-list (c.fields) 0 acc
+   in ir-tdce-vctors xs (i + 1) (ir-tdce-atype-list (c.return-type) 0 a1)
+
+  ir-tdce-def-refs : ATypeDef, List Text -> List Text
+  ir-tdce-def-refs (td) (acc) =
+   when td
+    is ARecordTypeDef (n) (tvars) (fields) (linear) (sp) -> ir-tdce-rfields fields 0 acc
+    is AVariantTypeDef (n) (tvars) (ctors) (sp) -> ir-tdce-vctors ctors 0 acc
+    is AUnitTypeDef (n) (inner) (sp) -> ir-tdce-atype inner acc
+
+  ir-tdce-def-name : ATypeDef -> Text
+  ir-tdce-def-name (td) =
+   when td
+    is ARecordTypeDef (n) (tvars) (fields) (linear) (sp) -> n.value
+    is AVariantTypeDef (n) (tvars) (ctors) (sp) -> n.value
+    is AUnitTypeDef (n) (inner) (sp) -> n.value
+
+ A VARIANT'S CONSTRUCTORS ARE ROOTS TOO, and forgetting that is how this
+ drops a type the program plainly uses. `Maybe` is reached by writing `Just`,
+ never by writing `Maybe`, and the IR records that as a value name in
+ `IrCtorPat` or a call -- not as a type. So a constructor's name entering the
+ def-level reachability must also root the type that declares it.
+
+ THE CONSTRUCTOR NAMES GO IN FIRST AND THE TYPE NAMES OVERWRITE THEM, because
+ the two namespaces share one table and a collision has to fail in the safe
+ direction. `Foo = | Foo (Integer)` is ordinary and harmless -- both entries
+ name the same slot. The dangerous shape is a constructor `Foo` belonging to
+ type `Bar` while a type `Foo` also exists: if the constructor won, a mention
+ of type `Foo` would root `Bar` and `Foo` would be dropped while live. With
+ the type winning, a mention of constructor `Foo` roots type `Foo` instead --
+ one type kept that nobody needed, which is the direction this whole pass is
+ allowed to be wrong in.
+
+  ir-tdce-ctor-index : List ATypeDef, Integer, Integer, OffsetTable -> OffsetTable
+  ir-tdce-ctor-index (tds) (i) (len) (tbl) =
+   if i == len then tbl
+   else let td = list-at tds i
+   in ir-tdce-ctor-index tds (i + 1) len (ir-tdce-ctor-index-one td i tbl)
+
+  ir-tdce-ctor-index-one : ATypeDef, Integer, OffsetTable -> OffsetTable
+  ir-tdce-ctor-index-one (td) (i) (tbl) =
+   when td
+    is AVariantTypeDef (n) (tvars) (ctors) (sp) -> ir-tdce-ctor-names ctors 0 i tbl
+    is otherwise -> tbl
+
+  ir-tdce-ctor-names : List AVariantCtorDef, Integer, Integer, OffsetTable -> OffsetTable
+  ir-tdce-ctor-names (xs) (i) (slot) (tbl) =
+   if i == list-length xs then tbl
+   else let c = list-at xs i
+   in ir-tdce-ctor-names xs (i + 1) slot (offset-table-set tbl ((c.name).value) slot)
+
+  ir-tdce-build-index : List ATypeDef, Integer, Integer, OffsetTable -> OffsetTable
+  ir-tdce-build-index (tds) (i) (len) (tbl) =
+   if i == len then tbl
+   else ir-tdce-build-index tds (i + 1) len (offset-table-set tbl (ir-tdce-def-name (list-at tds i)) i)
+
+  ir-tdce-flood : List ATypeDef, OffsetTable, Integer, DceWork -> DceWork
+  ir-tdce-flood (tds) (tbl) (i) (w) =
+   if i >= list-length (w.frontier) then w
+   else let cur = list-at (w.frontier) i
+   in let names = ir-tdce-def-refs (list-at tds cur) []
+   in ir-tdce-flood tds tbl (i + 1) (ir-dce-add-names names 0 (list-length names) tbl w)
+
+  ir-tdce-filter : List ATypeDef, List Boolean, Integer, Integer, List ATypeDef -> List ATypeDef
+  ir-tdce-filter (tds) (visited) (i) (len) (acc) =
+   if i == len then acc
+   else if list-at visited i then ir-tdce-filter tds visited (i + 1) len (list-push acc (list-at tds i))
+   else ir-tdce-filter tds visited (i + 1) len acc
+
+ Order is preserved, so the kept list is a subsequence of the original and a
+ plug that reads type-defs positionally is unaffected beyond seeing fewer.
+
+  ir-prune-unreachable-typedefs : IRChapter, List ATypeDef -> List ATypeDef
+  ir-prune-unreachable-typedefs (m) (type-defs) =
+   let n = list-length type-defs
+   in if n == 0 then type-defs
+   else let tbl0 = ir-tdce-ctor-index type-defs 0 n offset-table-empty
+   in let tbl = ir-tdce-build-index type-defs 0 n tbl0
+   in let roots = ir-tdce-defs (m.defs) 0 (ir-tdce-value-names (m.defs) 0 [])
+   in let w0 = DceWork { visited = ir-dce-falses n 0 (__list-with-capacity n), frontier = [] }
+   in let w = ir-tdce-flood type-defs tbl 0 (ir-dce-add-names roots 0 (list-length roots) tbl w0)
+   in ir-tdce-filter type-defs (w.visited) 0 n []
+
+ The value names come from the def prune's own collector, reused rather than
+ rewritten: a constructor name it finds is exactly the evidence that the type
+ declaring it is live.
+
+  ir-tdce-value-names : List IRDef, Integer, List Text -> List Text
+  ir-tdce-value-names (xs) (i) (acc) =
+   if i == list-length xs then acc
+   else ir-tdce-value-names xs (i + 1) (ir-dce-collect-expr ((list-at xs i).body) acc)
+
 Section: IRDef Emission
 
  `unique-params` names the parameters declared `linear`. It is carried the
