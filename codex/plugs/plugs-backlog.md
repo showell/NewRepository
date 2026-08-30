@@ -4285,3 +4285,170 @@ one: a 22-line prose block in this same chapter moved the fingerprint
 files byte-identical (ladder JUSTIFICATIONS.md, "A prose block moves the plug
 and not its output", 2026-08-25). Said plainly so nobody reads a fresh sweep
 into it.
+||||||| 58b08c38
+
+## 2.06 -- DONE 2026-08-29 (Claude, contributed by Steve Howell): the zig plug had no emitter for `real-to-int` or `real-from-int`, so no transpiled program could convert between Real and Integer -- or report a computed Real at all
+
+`ZigBuiltinEmitter` carried 69 entries and, of the whole real-conversion family,
+only `bits-to-real-approx`. Both directions of the f64 pair fell through to the
+generic refusal:
+
+    error: zig plug: no emitter for real-to-int
+    error: zig plug: no emitter for real-from-int
+
+They are declared in `Types/Builtins.codex:281-282` with types
+`Integer -> Real` and `Real -> Integer`, they have bare-metal emitters, and
+arm64, riscv and wgsl all implement them. This arm did not.
+
+### The consequence that cost the most was not the conversion
+
+`show` on a Real is refused by this plug -- deliberately, and correctly: it needs
+a `__real_to_text` the plug does not have, and `std.fmt` would agree with bare
+metal on some values and not others. That refusal is right and is not touched
+here.
+
+But with the conversions ALSO missing there was no way out for a Real at all. It
+could not be printed, and it could not be turned into something that could. **A
+failing test could say WHERE it failed and never WHAT it computed.** Measured
+cost, while porting a 3,400-line zig program to Codex: a numeric tolerance had to
+be found by BINARY-SEARCHING it -- tighten, rebuild, see which seams go red --
+instead of read off a diff; and one wrong coordinate had to be diagnosed by
+re-simulating the whole computation in f64 in a separate zig program, to
+establish that 20.606868 against an expected 20.606842 was floating-point width
+and not a bug.
+
+Both retire with this row. `real-to-int (x * 1000.0)` is a scaled-integer dump
+and a plain diff.
+
+A second consequence, smaller but constant: no counted loop could widen its
+index, since `0.0 + i` is a type error (CDX2001) and there was no conversion
+either. Every `i / n * two-pi` had to carry a Real accumulator threaded beside
+the Integer counter.
+
+### What the emission is, and why the guards are not decoration
+
+Bare metal is `emit-real-from-int-builtin` / `emit-real-to-int-builtin` at
+`Emit/X86_64Builtins.codex:1663-1679`: `cvtsi2sd` one way, `cvttsd2si` the other.
+
+`cvttsd2si` truncates toward zero and answers x86's "integer indefinite" --
+INT64_MIN -- for a NaN, for an infinity, and for anything whose truncation will
+not fit i64. Zig's `@intFromFloat` truncates the same way **but is UNDEFINED out
+of range**, so a bare cast is not a different answer from bare metal, it is no
+answer at all. `cx_real_to_int` therefore carries three guards, which are the
+mirror of the hardware's own behaviour. 2^63 is exact in f64, so both bounds are
+exact and the comparisons catch the infinities on the way past.
+
+Checked against the instructions themselves rather than against the manual, by
+inline asm, over 31 values: **zero disagreements**, including NaN, both
+infinities, +/-1e300, exactly +/-2^63, the largest f64 below 2^63, the next
+representable below -2^63, and the 2^53+1 rounding region.
+
+### Scope: the f64 pair only
+
+The `real-approx-*` family is deliberately untouched. Every plug in the house
+carries Real as f64 whatever width the type asked for -- the wasm plug states it
+as policy -- while bare metal picks the opcode by type and emits `ADDSS` for
+`Real approximate`. Filling the f32 conversions would make that divergence
+observable for the first time, which is a much larger conversation and belongs in
+its own row with its own repro. This change cannot make it worse and does not
+approach it.
+
+### The parameter names add no reserved surface
+
+A prelude function's parameter names are part of the plug's reserved surface: a
+program whose top-level name collides with one gets a `const` shadowed by a
+parameter, which zig forbids. So both helpers take `v`, which
+`zig-prelude-decls` already carries and other prelude functions already use.
+The two function names are the only surface this adds.
+
+    parts    96 -> 98      declarations 96 -> 98, every one named by a part
+    surface  129 -> 131    the two new function names, both reserved
+    missing  none, measured against an unmodified tree as control
+
+### What has been measured, and what has not
+
+The zig arm is measured. `codex/test/ops/real-int-conversions.codex` is new
+here and its eleven lines come back byte-identical to its `.expected` through
+the transpiler; no emitted file carries a missing-emitter marker. The
+transpiler's own fixed point holds on this branch -- both passes 2,445,785
+bytes, identical -- and a 3,400-line ported program regrades clean on it.
+
+**Bare metal is measured, and the `.expected` is a reading rather than a
+claim.** The seed compiled and ran both tests under QEMU at seed `B066CEB5`:
+all eleven lines byte-identical to `real-int-conversions.expected`, truncation
+direction and both range-edge lines included. So the two arms agree on every
+line -- the same file also matches through the transpiler.
+
+**The control is what makes that worth anything.**
+`codex/test/ops/real-saturating-finite` ran in the same pass on the same rig.
+Its `.expected` is upstream's, committed in `b643e7cb` on 2026-08-20, and it
+exercises both builtins under test. It came back byte-identical, so the rig
+that produced the new answer is checked against an answer it could not have
+influenced. A rig that emits plausible output is otherwise indistinguishable
+from a correct one.
+
+## 2.07 -- DONE 2026-08-30 (Claude, contributed by Steve Howell): the zig plug had no emitter for `real-to-bits` or `bits-to-real`, so no transpiled program could read a Real's bit pattern -- the only exact way to compare two Reals, and the only way to see a negative zero or a NaN at all
+
+Row 2.06 filled the f64 CONVERSION pair. This fills the f64 BITCAST pair beside
+it, leaving `bits-to-real-approx` no longer the odd one out:
+
+    error: zig plug: no emitter for real-to-bits
+    error: zig plug: no emitter for bits-to-real
+
+Both are declared in `Types/Builtins.codex:285-286` as
+`FunTy real-f64 empty-row int-ty-default` and its inverse, both have bare-metal
+emitters at `Emit/X86_64Builtins.codex:1725-1741`, and `codex/test/ops/`
+already exercises them in four places (`real-bitcast`, `real-trapping`,
+`real-trapping-overflow`, `vec-array`) that the zig arm therefore cannot run.
+
+THESE TWO ARE THE EASIEST ROWS IN THE FAMILY AND THE REASON IS WORTH STATING.
+Bare metal emits `mov-rr` for both -- a register move, which is to say nothing:
+it holds a Real f64 as its own bits in a general register, so the value and its
+pattern are the same sixty-four bits. Zig separates the two types, so the same
+identity is spelled `@bitCast`. Where 2.06 needed three range guards to mirror
+what `cvttsd2si` answers out of range, these need none: the mapping is total in
+both directions, every f64 has a pattern and every i64 names an f64.
+
+AND THEY ARE THE ONLY REMAINING ROWS IN THE FAMILY THAT ARE SAFE TO FILL, which
+is the part of this entry that is a question rather than a patch. Thirteen real
+builtins still have no zig emitter:
+
+    real-approx-from-int   real-approx-to-int   real-approx-to-bits
+    to-real-approx         from-real-approx
+    to-real-trapping       from-real-trapping
+    to-real-saturating     from-real-saturating
+    to-real-approx-trapping    from-real-approx-trapping
+    to-real-approx-saturating  from-real-approx-saturating
+
+Every one of them is blocked on the same fact, and it is not in the conversion
+rows. `ZigEmitter.codex:342` and `:373` map `RealTy (w) (m)` to `f64` --
+DISCARDING BOTH the width and the mode -- and the arithmetic opcodes for approx,
+trapping and saturating are collapsed onto one operator. So in this plug an f32
+Real is an f64, a trapping Real does not trap, and a saturating one does not
+saturate.
+
+That makes the bitcast pair safe for exactly the reason the others are not: a bit
+pattern is a bit pattern, and `real-to-bits` asks nothing about width or mode.
+The other thirteen do. `real-approx-to-bits` would have to narrow an f64 that
+bare metal would never have held, because bare metal rounds to f32 at every
+operation and this plug does not; `to-real-trapping` would hand back a value the
+program is entitled to believe traps. Filling them would replace an HONEST
+REFUSAL with a plausible wrong number, which is the worse of the two failures --
+the refusal is currently the only thing telling the truth about the
+representation.
+
+So the recommendation is that the thirteen stay refused until the representation
+question is answered, and that the question is yours rather than ours: should the
+zig plug carry `Real approximate` as f32 and round its arithmetic accordingly? We
+have not touched it because `ZigEmitter.codex:1270-1273`'s collapse looks
+house-wide -- the C# plug is character-for-character identical and the wasm plug
+states it as policy -- and a convention that deliberate is not one to change from
+outside.
+
+`codex/test/ops/real-bitcast-f64` is new. It covers what a conversion emitter
+cannot fake: NEGATIVE ZERO, which Real comparison cannot distinguish from
+positive zero at all and which a truncating emitter answers 0 for; a NaN, whose
+pattern is the only evidence it survived, since it does not equal itself; and
+infinity beside the largest finite double, one bit apart, where a conversion
+answers indefinite for one and overflows on the other. The ground-truth block is
+checkable against IEEE-754 by hand.
