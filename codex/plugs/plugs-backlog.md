@@ -6851,6 +6851,15 @@ builtins (50 chapters call them) and cannot run without them.
 them twice; the file's own rule is to cite a row by subject rather than by
 number.
 
+**The `-Kernel` fix IS exercised, correcting the commit that made it.** That
+commit says the change was read and not run because the box has no pwsh; the
+box has pwsh 7.5.4, off `PATH` at `~/.local/pwsh/pwsh`, which is the path the
+contributing ladder's own harness calls. `run.ps1` parses clean, and the
+selection was driven directly from a working directory OUTSIDE the repository
+-- the case the defect was about -- with the self-hosted kernel present and
+absent in turn. Both arms answer an absolute path and both pass `-Kernel`.
+What is still NOT run is the plug end to end, which needs a guest.
+
 **The PR paid for itself even unlanded.** Reviewing it turned up a riscv defect
 nothing in the corpus reached: `rv-fcvt-l-d` in `RiscVEncoder.codex` passed
 `rs2 = 0`, selecting FCVT.W.D, the 32-bit form, so riscv `real-to-int` and
