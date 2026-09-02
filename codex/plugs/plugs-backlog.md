@@ -6815,7 +6815,50 @@ Boundary: the CCE layer itself (R-CCE, `Foreword chapter CCE`) is untouched;
 this row is about emitting it where nothing needs it. One plug per CL
 (R-ONE); the compiler is not on the path, so no token.
 
-## 2.06 -- DONE 2026-08-29 (Claude, contributed by Steve Howell): the zig plug had no emitter for `real-to-int` or `real-from-int`, so no transpiled program could convert between Real and Integer -- or report a computed Real at all
+## 2.19 -- OPEN (Claude, contributed by Steve Howell, PR 100; NOT landed at Update 54): the zig plug has no emitter for `real-to-int` or `real-from-int`, so no transpiled program can convert between Real and Integer -- or report a computed Real at all
+
+**STATUS AT UPDATE 54, AND THE BLOCKER IS NOT THE EMITTER.** Upstream checked
+the emitter against the code rather than against this row's description and
+found no input where the zig arm disagrees with the x86 one: `v != v` catches
+NaN, the range tests catch both infinities, the top bound is exact (the ulp
+just below 2^63 is 1024, so there is no gap), `-2^63` is admitted by `<` rather
+than `<=`, and `-0.0` truncates to 0 as `cvttsd2si` does.
+
+What blocks it is WHERE THE TEST LIVES. `codex/test/ops/*.codex` is enrolled by
+`build/test-cross-batch.ps1`, which grades the same `.expected` on arm64 and
+riscv64. Measured upstream on all three rather than read off the ISA manuals:
+
+| probe | x86-64 | arm64 | riscv64 |
+|---|---|---|---|
+| `real-to-int` NaN | -9223372036854775808 | 0 | 2147483647 |
+| `real-to-int` +inf | -9223372036854775808 | 9223372036854775807 | 2147483647 |
+| `real-to-int` -inf | -9223372036854775808 | -9223372036854775808 | -2147483648 |
+| `real-to-int 2^63` | -9223372036854775808 | 9223372036854775807 | 2147483647 |
+
+So the NaN and out-of-range rows of `real-int-conversions.expected` are x86's
+answers sitting in a directory three backends are graded against, and which of
+the three Codex should MEAN is a language-level question above this row.
+
+**What would land it**, in upstream's own words: keep `real-from-int` and the
+in-range `real-to-int` rows in `codex/test/ops`, where all three arches agree,
+and either drop the NaN / infinity / overflow rows or move them somewhere that
+is not cross-graded -- or use per-backend expectations, which the cross battery
+already supports. Not done here, because it is a fixture decision and this
+branch exists to keep the EMITTER available to safari-codex, which needs both
+builtins (50 chapters call them) and cannot run without them.
+
+**This row is 2.19 because 2.06 through 2.18 are taken upstream**, several of
+them twice; the file's own rule is to cite a row by subject rather than by
+number.
+
+**The PR paid for itself even unlanded.** Reviewing it turned up a riscv defect
+nothing in the corpus reached: `rv-fcvt-l-d` in `RiscVEncoder.codex` passed
+`rs2 = 0`, selecting FCVT.W.D, the 32-bit form, so riscv `real-to-int` and
+`show` on a Real were silently wrong for EVERY value above 2^31, not only at
+the edges. Fixed upstream as row 1.100.
+
+The account of the original work follows, as sent.
+
 
 `ZigBuiltinEmitter` carried 69 entries and, of the whole real-conversion family,
 only `bits-to-real-approx`. Both directions of the f64 pair fell through to the

@@ -25,11 +25,20 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 # back to the seed when there is not, rather than requiring a full build.ps1
 # before the plug can be run at all. The plug's output does not depend on which
 # compiler produced the IR it is handed.
-$Kernel     = Join-Path $Repo 'build-output' 'bare-metal' 'Codex.cdx'
-$KernelArgs = @()
-if (-not (Test-Path $Kernel)) {
-    $KernelArgs = @('-Kernel', (Join-Path $Repo 'seed' 'Codex.cdx'))
+#
+# -Kernel IS PASSED ON BOTH ARMS, AND THAT IS THE LOAD-BEARING PART. Without
+# it, compile.ps1's own default is the RELATIVE path build-output/bare-metal/
+# Codex.cdx, resolved against the caller's working directory, while the test
+# above is absolute. From anywhere but the repository root the two disagree:
+# the file is found here, no -Kernel is passed, and compile.ps1 then exits 2
+# on a path it could not resolve -- a pass that turns into a failure one line
+# later. Passing it explicitly also puts the choice in compile.ps1's `kernel:`
+# digest line, so the log says which compiler produced the IR.
+$Kernel = Join-Path $Repo 'build-output' 'bare-metal' 'Codex.cdx'
+if (-not (Test-Path -PathType Leaf $Kernel)) {
+    $Kernel = Join-Path $Repo 'seed' 'Codex.cdx'
 }
+$KernelArgs = @('-Kernel', $Kernel)
 
 # -Passes 'text-plug' is what a SOURCE plug must receive: the default pipeline
 # inlines, and an inlined call site never reaches the emitter at all. Measured
