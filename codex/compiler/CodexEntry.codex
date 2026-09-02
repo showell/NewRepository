@@ -1,0 +1,27 @@
+Chapter: Codex Entry
+  grounds Device.Port, Device.Block
+  cites Codex chapter Opening (codex-opening)
+
+ The entry point, and nothing else.
+
+ `opening` is resolved BY NAME all over the compiler -- `opening-entry-point`
+ in Core/Name.codex is the literal "opening", the emitter calls it
+ (X86_64Chapter.codex:456), the scoper counts definitions of it
+ (ChapterScoper.codex:46) and refuses a second, and it heads both emit-root
+ lists. Keeping that name here and renaming the driver body to `codex-opening`
+ leaves every one of those lookups working while freeing the chapter that
+ holds the phases: a program that is its OWN entry point can now bundle
+ Chapter: Opening and call compile-checked directly, because that chapter no
+ longer defines an `opening` to collide with its own.
+
+ This file is a LOCAL REPRODUCTION of the shape upstream described on PR 116,
+ written to measure whether it gives the ladder what it needs before their
+ version ships. It is not their code and must not be sent anywhere.
+
+Section: Entry
+
+  opening : [Console, FileSystem, Device.Block] Nothing = act
+   codex-opening
+  end
+
+Page 1
