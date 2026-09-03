@@ -456,12 +456,6 @@ Section: Applying It
    if i >= list-length args then acc
    else zig-arg-types args (i + 1) (acc & [zig-expr-type (list-at args i)])
 
-  emit-zig-apply-args : List IRExpr, ZigCtx, Integer, Integer -> Text
-  emit-zig-apply-args (args) (ctx) (d) (i) =
-   if i == list-length args then ""
-   else if i == list-length args - 1 then emit-zig-expr (list-at args i) ctx (d + 1)
-   else emit-zig-expr (list-at args i) ctx (d + 1) & ", " & emit-zig-apply-args args ctx d (i + 1)
-
 
 Section: Constructor Application
   emit-zig-ctor-apply : ZigCtorEntry, List IRExpr, ZigCtx, Integer, CodexType -> Text
