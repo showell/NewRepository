@@ -29,6 +29,9 @@
 # what its own prose requires.
 #
 # Not wired into any gate. Run it after changing zig-prelude.
+#
+# It reads TWO files: the parts come from ZigPrelude.codex and zig-prelude-decls
+# from ZigEmitter.codex.
 [CmdletBinding()]
 param(
     [string]$Subjects = 'queue-test,osc-noise,hamt-test,unit-family',
@@ -67,7 +70,7 @@ function Get-ShakeParts([string]$src) {
         }
         $frag[$m.Groups[1].Value] = $sb.ToString()
     }
-    if ($frag.Count -eq 0) { throw "no zig-p-* fragment lists in ZigEmitter.codex: is the prelude restructured?" }
+    if ($frag.Count -eq 0) { throw "no zig-p-* fragment lists in ZigPrelude.codex: is the prelude restructured?" }
     $order = @()
     foreach ($m in [regex]::Matches($src, 'ShakePart \{ name = "([^"]*)", frags = ([a-z0-9-]+) \}')) {
         $key = $m.Groups[2].Value
@@ -100,8 +103,14 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $names = $Subjects -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
 if ($names.Count -lt 1) { throw "need at least one subject" }
 
+# TWO FILES, ONE CHAPTER. The fragment lists and the zig-prelude-parts table
+# live in ZigPrelude.codex; zig-prelude-decls, which is about SANITIZATION and
+# not about the runtime, stayed in ZigEmitter.codex beside the keyword list it
+# is checked against. They are read separately so a missing one names itself
+# rather than failing as "no zig-p-* fragment lists".
 $emitterSrc = Get-Content (Join-Path $repo 'codex\plugs\zig\ZigEmitter.codex') -Raw
-$parts = Get-ShakeParts $emitterSrc
+$preludeSrc = Get-Content (Join-Path $repo 'codex\plugs\zig\ZigPrelude.codex') -Raw
+$parts = Get-ShakeParts $preludeSrc
 $whole = -join ($parts | ForEach-Object { $_[1] })
 
 $emitted = @()

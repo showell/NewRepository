@@ -39,7 +39,7 @@ $PageModules = @(
     @{ plug = 'csharp';     file = 'csharp-stdio.wasm';     transport = 'ir'; chapters = 'CsAst,CSharpEmitter,CSharpEmitterExpressions,CSharpPlug:Network Config|Drain|Body,CSharpStdio' }
     @{ plug = 'python';     file = 'python-stdio.wasm';     transport = 'ir'; chapters = 'PythonEmitter,PythonStdio' }
     @{ plug = 'typescript'; file = 'typescript-stdio.wasm'; transport = 'ir'; chapters = 'TypeScriptEmitter,TypeScriptStdio' }
-    @{ plug = 'zig';        file = 'zig-stdio.wasm';        transport = 'ir'; chapters = 'ZigEmitter,ZigStdio' }
+    @{ plug = 'zig';        file = 'zig-stdio.wasm';        transport = 'ir'; chapters = 'ZigPrelude,ZigEmitter,ZigStdio' }
     @{ plug = 'rust';       file = 'rust-stdio.wasm';       transport = 'ir'; chapters = 'RustEmitter,RustStdio' }
     @{ plug = 'go';         file = 'go-stdio.wasm';         transport = 'ir'; chapters = 'GoEmitter,GoStdio' }
     @{ plug = 'java';       file = 'java-stdio.wasm';       transport = 'ir'; chapters = 'JavaEmitter,JavaStdio' }
