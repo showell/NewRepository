@@ -560,3 +560,5 @@ Section: The Parts Table
  root must reproduce what the hand-written chunk list produced.
 
   zig-prelude : Text = shake-text zig-prelude-parts zig-prelude-part-names
+
+Page 2 of 2
