@@ -462,7 +462,7 @@ Section: Constructor Application
   emit-zig-ctor-apply (c) (args) (ctx) (d) (cty) =
    let tname = zig-sanitize (c.type-name)
    in let cname = zig-sanitize (c.ctor-name)
-   in let boxed = zig-typedef-recursive ctx (c.type-name)
+   in let boxed = zig-typedef-boxed ctx (c.type-name)
    in let base = if boxed then tname & "S" else tname & zig-ctor-type-args cty (ctx.scope-tvars)
    in let open = if boxed then "cx_new(" else ""
    in let close = if boxed then ")" else ""
