@@ -1438,25 +1438,17 @@ Section: Type Definition Emission
    else if zig-ctor-fields-self-ref ((list-at ctors i).fields) 0 n then True
    else zig-variant-self-recursive n ctors (i + 1)
 
- WHICH VARIANTS ARE BOXED, and it is no longer only the self-recursive ones.
+ WHICH VARIANTS ARE BOXED: every payload-carrying one.
 
- BARE METAL BOXES EVERY VARIANT VALUE: they are heap words, which is why
- `address-of` there is emit-identity-builtin -- the value IS the address, and
- no type can fail it. This plug used to box only what zig's finite-size rule
- forced, so `address-of`'s meaning depended on a decision made for SIZING:
- IRExpr held IRExpr directly and was boxed, IRPat reached itself only through
- `List IRPat` and was not, and `cx_address_of` refused on the second.
+ Bare metal boxes every variant value -- they are heap words, which is why
+ `address-of` there is emit-identity-builtin: the value IS the address, and no
+ type can fail it. Boxing the same set here makes `address-of` total, rather
+ than resting on the decision zig's finite-size rule makes for SIZING. A
+ variant that reaches itself only through a `List` is finite either way, and
+ `cx_address_of` has no arm for one that is left unboxed.
 
- Nothing noticed until Update 55, whose compiler memory campaign added the
- lowering memo-copy (`lcopy-pat`, `lcopy-stmts`) and asked
- `address-of p < mc.mc-floor` of an IR pattern for the first time. The gap was
- always there; the caller is new. Measured on the ladder at U55: six of
- fourteen rungs fail, every one on this refusal.
-
- Boxing every payload-carrying variant makes the plug agree with bare metal's
- own model rather than diverge from it, and makes `address-of` total the way it
- is there. A generic variant stays unboxed -- it is emitted as a `fn ... type`
- and has no single declaration to point at.
+ A generic variant stays unboxed: it is emitted as a `fn ... type` and has no
+ single declaration to point at.
 
   zig-typedef-boxed-loop : List ATypeDef, Integer, Text -> Boolean
   zig-typedef-boxed-loop (tds) (i) (n) =
