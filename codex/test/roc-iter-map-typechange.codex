@@ -1,0 +1,36 @@
+Chapter: RocIterMapTypechange
+  cites Foreword chapter Console
+
+ Probe (NOT a Roc port): iter-map with a TYPE-CHANGING transform, Integer -> Text,
+ so a != b. Tests whether either frontend wrongly merges the element types.
+
+Section: Types
+
+  Iter (a) = record {
+   next : Integer -> Step a
+  }
+
+  Step (a) = | One (a) (Iter a) | Done
+
+Section: Functions
+
+  iter-map : Iter a, (a -> b) -> Iter b
+  iter-map (it) (transform) =
+   Iter { next = \ignored -> when ((it.next) 0)
+     is One (item) (rest) -> One (transform item) (iter-map rest transform)
+     is Done -> Done }
+
+  range-to : Integer, Integer -> Iter Integer
+  range-to (start) (stop) =
+   Iter { next = \ignored -> if start == stop then Done
+     else One start (range-to (start + 1) stop) }
+
+Section: Entry
+
+  opening : [Console] Nothing
+  opening = act
+   let mapped = iter-map (range-to 1 3) (\n -> show n)
+   in when ((mapped.next) 0)
+    is One (first) (rest) -> print-line-uni first
+    is Done -> print-line-uni "done"
+  end
