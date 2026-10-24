@@ -344,9 +344,9 @@ Section: Data Loading
     let tok = state-get-text "token"
     in fetch-get-then ("/api/chat/conversations?t=" & tok) convs-cb
 
- The poll asks for the list too, so a conversation someone else starts
- with you shows up without a reload; an answer the same as the last one
- changes nothing on the page and is not drawn again.
+ A change on the server asks for the list too, so a conversation someone
+ else starts with you shows up without a reload; an answer the same as the
+ last one changes nothing on the page and is not drawn again.
 
   convs-cb : Text -> Integer
   convs-cb (resp) =
@@ -381,8 +381,8 @@ Section: Data Loading
     in fetch-get-then ("/api/chat/messages?t=" & tok & "&conv=" & conv-id) msgs-cb
 
  A render rebuilds the page, the compose bar with it, so a render while
- someone types takes the input away from them. The poll asks for the open
- conversation's messages every three seconds; messages are only ever added,
+ someone types takes the input away from them. A change on the server asks
+ for the open conversation's messages; messages are only ever added,
  so the same conversation with the same count is the same thread, and it is
  not drawn again. Another conversation, or a new message, is.
 
@@ -536,12 +536,14 @@ Section: Entry
     in let sc = scroll-messages 0
     in 0
 
-  poll-messages : Integer -> Integer
-  poll-messages (x) =
+ The server's event stream says only that something changed, or that the
+ stream (re)connected; either way the page asks again, with its own token.
+
+  on-chat-event : Text -> Integer
+  on-chat-event (what) =
     let c = if state-get-text "token" == "" then 0 else load-conversations 0
     in let active = state-get sk-active-conv
-    in let m = if active < 0 then 0 else load-messages 0
-    in set-timeout poll-messages 3000
+    in if active < 0 then 0 else load-messages 0
 
   opening : [Console] Integer
   opening = act
@@ -551,7 +553,7 @@ Section: Entry
     in let s3 = set-render render-chat
     in let h = register-handlers no-pick chat-click
     in let r = render-chat 0
-    in let p = set-timeout poll-messages 3000
+    in let p = event-source-then "/api/chat/events" on-chat-event
     in check-auth 0
   end
 
