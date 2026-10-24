@@ -3,8 +3,11 @@ Chapter: ChatServe
   cites Chat chapter ChatStore
   cites Net chapter WebServer
   cites Net chapter NetIO
+  cites Net chapter NetDriver
+  cites Net chapter NetCompact
   cites Net chapter TcpTransport
   cites Net chapter NetworkStack
+  cites Net chapter Ethernet
   cites Net chapter Tcp
   cites Works chapter Http
   cites Foreword chapter Fat16
@@ -14,12 +17,13 @@ Chapter: ChatServe
 
  Codex Chat on bare metal: the network shell around ChatServer, as
  IdeaServer is Idea Forge's, and the one thing apps/chat/web/server.ps1 was
- that this tree did not have. It listens on guest port 9200 and serves one
- connection at a time (boot with -portfwd <host>:9200, or QEMU's hostfwd to
- it); the state is ChatStore's, read off the boot volume once and written
- after every request that changes it, so a reboot finds the chat it left.
- The page is on the same disk: CHAT.HTM, ChatPage as the HTML plug builds
- it, served at `/`.
+ that this tree did not have. It listens on guest port 9200 (boot with
+ -portfwd <host>:9200, or QEMU's hostfwd to it) and serves every connection
+ at once on WebServer's concurrent loop, WebMux: a page, the API calls of
+ every open page, and each page's event stream. The state is ChatStore's,
+ read off the boot volume once and written after every request that changes
+ it, so a reboot finds the chat it left. The page is on the same disk:
+ CHAT.HTM, ChatPage as the HTML plug builds it, served at `/`.
 
  What ChatServer asks of its host this shell answers from the machine. A
  token is a word from the processor's random number generator, in 16 hex
@@ -69,16 +73,28 @@ Section: Answering
 
   chat-page-path : Text = "CHAT.HTM"
 
-  chat-page : [Device.Block] HttpResponse
-  chat-page = act
+ The page is read once, before the loop takes its compaction mark, and kept
+ as the bytes of its whole response: below the mark it outlives every
+ compaction, and a page load costs a send and nothing else.
+
+ The file's bytes are sent as they are, never through Text. The page is
+ UTF-8 (the font pack's licence has a copyright sign), and `http-encode`
+ turns each character into one list element, so a character past 127
+ becomes an element past 255 and the frame it lands in is never received.
+
+  chat-page-bytes : [Device.Block] List Integer
+  chat-page-bytes = act
     vol <- fat16-boot-volume
-    when fat16-read-text vol chat-page-path
-      is Just (t) -> HttpResponse { status = http-200, content-type = "text/html", body = t }
-      is None -> HttpResponse { status = http-404, content-type = "text/plain", body = "no page on this disk: CHAT.HTM" }
+    when fat16-read-bytes vol chat-page-path
+      is Just (bs) -> http-encode-binary (HttpBinaryResponse { status = http-200, content-type = "text/html; charset=utf-8", body-bytes = bs, body-length = list-length bs })
+      is None -> http-encode (HttpResponse { status = http-404, content-type = "text/plain", body = "no page on this disk: CHAT.HTM" })
   end
 
+  chat-is-page : Text -> Boolean
+  chat-is-page (p) = p == "/" | p == "/chat.html"
+
  The routes after which server.ps1 saved its state, and this shell saves
- ChatStore's.
+ ChatStore's. They are the only routes that change it.
 
   chat-changes : Text -> Boolean
   chat-changes (p) =
@@ -87,11 +103,7 @@ Section: Answering
   chat-answer : ChatState, HttpRequest -> [Device.Block] ChatAnswer
   chat-answer (st) (req) =
     let p = chat-path-only (req.path)
-    in if p == "/" | p == "/chat.html" then act
-      page <- chat-page
-      ChatAnswer { an-state = st, an-resp = page }
-    end
-    else let tok = chat-fresh-token 0
+    in let tok = chat-fresh-token 0
     in if p == "/api/chat/register" & text-length tok == 0 then
       ChatAnswer { an-state = st, an-resp = chat-error "no random number generator to make a token" }
     else let (st2, resp) = chat-route st (ChatHost { ch-time = chat-clock 0, ch-token = tok }) req
@@ -102,66 +114,297 @@ Section: Answering
     end
     else ChatAnswer { an-state = st2, an-resp = resp }
 
-Section: Serve Loop
+Section: Event Streams
 
-  chat-nat-gw-mac : List Integer = [82, 85, 10, 0, 2, 2]
+ A page that asks for /api/chat/events is answered with an event stream's
+ head and kept: the connection stays in the mux, and after every change a
+ `data: changed` frame goes down it. The frame says only that something
+ changed; the page asks again with its own token, so nothing private rides
+ a stream. The body is delimited by the connection closing, as HTTP/1.0's
+ is, so the head has no length.
 
-  chat-fresh-transport : Integer -> TcpTransportState
-  chat-fresh-transport (x) =
-    let sess = net-session-new local-mac local-ip gateway-ip 9200 0 gateway-ip 1000
-    in let sess2 = set-arp sess (arp-cache-add (sess.arp) gateway-ip chat-nat-gw-mac)
-    in transport-new sess2
+ A stream's client sends nothing after its request, so the mux's reaper
+ would close it as idle. Each sweep sends every stream a `: ping` comment
+ instead, which resets its count; a stream a send cannot reach is closed
+ and dropped.
 
-  ChatServeStep = record {
-   sv-state : ChatState,
-   sv-diag : Text
+ A stream is known by its peer's address and port, one integer, kept in a
+ list beside the mux: WebConn is WebServer's, and has no field to mark one.
+
+  chat-events-path : Text = "/api/chat/events"
+
+  chat-stream-head : List Integer
+  chat-stream-head =
+    http-text-to-ascii "HTTP/1.0 200 OK" & [13, 10]
+    & http-text-to-ascii "Content-Type: text/event-stream" & [13, 10]
+    & http-text-to-ascii "Cache-Control: no-cache" & [13, 10]
+    & [13, 10]
+    & http-text-to-ascii ": open" & [10, 10]
+
+  chat-changed-frame : List Integer
+  chat-changed-frame = http-text-to-ascii "data: changed" & [10, 10]
+
+  chat-ping-frame : List Integer
+  chat-ping-frame = http-text-to-ascii ": ping" & [10, 10]
+
+  chat-ip-int : List Integer -> Integer
+  chat-ip-int (ip) =
+    bit-shl (list-at ip 0) 24 + bit-shl (list-at ip 1) 16 + bit-shl (list-at ip 2) 8 + list-at ip 3
+
+  chat-conn-key : TcpTransportState -> Integer
+  chat-conn-key (ts) =
+    let c = (ts.session).conn
+    in chat-ip-int (c.remote-ip) * 65536 + c.remote-port
+
+  chat-has-key : List Integer, Integer, Integer -> Boolean
+  chat-has-key (keys) (k) (i) =
+    if i >= list-length keys then False
+    else if list-at keys i == k then True
+    else chat-has-key keys k (i + 1)
+
+  chat-conns-have-key : List WebConn, Integer, Integer -> Boolean
+  chat-conns-have-key (conns) (k) (i) =
+    if i >= list-length conns then False
+    else if chat-conn-key ((list-at conns i).transport) == k then True
+    else chat-conns-have-key conns k (i + 1)
+
+ The streams whose connections the mux still holds.
+
+  chat-live-keys : List Integer, List WebConn, Integer, List Integer -> List Integer
+  chat-live-keys (keys) (conns) (i) (acc) =
+    if i >= list-length keys then acc
+    else let k = list-at keys i
+    in chat-live-keys keys conns (i + 1) (if chat-conns-have-key conns k 0 then list-push acc k else acc)
+
+Section: The Chat Mux
+
+  ChatMux = record {
+    cm-mux : WebMux,
+    cm-state : ChatState,
+    cm-streams : List Integer,
+    cm-page : List Integer,
+    cm-changed : Boolean
   }
 
-  chat-serve-one : ChatState -> [Network.Read, Network.Write, Device.Block] ChatServeStep
-  chat-serve-one (st) =
-    let ts = net-io-listen (chat-fresh-transport 0)
-    in act
-      ts2 <- net-io-accept ts 0
-      when (ts2.session).conn.state
-        is TcpEstablished -> chat-handle-request st ts2
-        is otherwise -> ChatServeStep { sv-state = st, sv-diag = "no-conn" }
-    end
+  chat-with-mux : ChatMux, WebMux -> ChatMux
+  chat-with-mux (cm) (m) = ChatMux { cm-mux = m, cm-state = cm.cm-state, cm-streams = cm.cm-streams, cm-page = cm.cm-page, cm-changed = cm.cm-changed }
 
-  chat-handle-request : ChatState, TcpTransportState -> [Network.Read, Network.Write, Device.Block] ChatServeStep
-  chat-handle-request (st) (ts) = act
-    recv <- net-io-recv-raw ts 0
-    if recv.has-data then
-      let req = http-parse-request (recv.data)
-      in if req.valid == False then act
-        sent <- web-send-http (recv.transport) (http-error "Bad request")
-        ts1 <- net-io-close sent
-        ChatServeStep { sv-state = st, sv-diag = "bad-request" }
-      end
-      else act
-        answer <- chat-answer st req
-        sent <- web-send-http (recv.transport) (answer.an-resp)
-        ts1 <- net-io-close sent
-        ChatServeStep { sv-state = answer.an-state, sv-diag = req.path & " -> " & (answer.an-resp).status }
-      end
+  chat-mux-set-conn : WebMux, Integer, TcpTransportState, WebState, List Integer, Integer -> WebMux
+  chat-mux-set-conn (m) (idx) (ts) (srv) (pending) (served) =
+    WebMux { listen = m.listen, conns = list-set-at (m.conns) idx (WebConn { transport = ts, server = srv, pending = pending, idle = 0 }), served = served }
+
+  chat-mux-drop : ChatMux, Integer -> ChatMux
+  chat-mux-drop (cm) (idx) =
+    let m = cm.cm-mux
+    in let m2 = WebMux { listen = m.listen, conns = web-mux-remove (m.conns) idx 0 [], served = m.served }
+    in ChatMux { cm-mux = m2, cm-state = cm.cm-state, cm-streams = chat-live-keys (cm.cm-streams) (m2.conns) 0 [], cm-page = cm.cm-page, cm-changed = cm.cm-changed }
+
+ Every stream gets the bytes, from connection `i` on. A send is a drain of
+ the one shared receive buffer, so each is settled before the next, as
+ WebServer's own sends are.
+
+  chat-push : ChatMux, List Integer, Integer -> [Network.Read, Network.Write] ChatMux
+  chat-push (cm) (bytes) (i) =
+    let m = cm.cm-mux
+    in if i >= list-length (m.conns) then cm
+    else let c = list-at (m.conns) i
+    in if chat-has-key (cm.cm-streams) (chat-conn-key (c.transport)) 0 == False then chat-push cm bytes (i + 1)
     else act
-      ts1 <- net-io-close (recv.transport)
-      ChatServeStep { sv-state = st, sv-diag = "no-data" }
+      sent <- net-io-send-raw-checked (c.transport) bytes
+      if sent.ns-complete then
+        chat-push (chat-with-mux cm (chat-mux-set-conn m i (web-mux-settle (sent.ns-transport)) (c.server) [] (m.served))) bytes (i + 1)
+      else act
+        closed <- flush-transport-outbox (transport-close (web-mux-settle (sent.ns-transport)))
+        chat-push (chat-mux-drop cm i) bytes i
+      end
     end
+
+  chat-mux-announce : ChatMux -> [Network.Read, Network.Write] ChatMux
+  chat-mux-announce (cm) =
+    if cm.cm-changed then act
+      pushed <- chat-push cm chat-changed-frame 0
+      ChatMux { cm-mux = pushed.cm-mux, cm-state = pushed.cm-state, cm-streams = pushed.cm-streams, cm-page = pushed.cm-page, cm-changed = False }
+    end
+    else cm
+
+  chat-open-stream : ChatMux, Integer, TcpTransportState, WebState -> [Network.Read, Network.Write] ChatMux
+  chat-open-stream (cm) (idx) (ts) (srv) =
+    let m = cm.cm-mux
+    in act
+      sent <- net-io-send-raw-checked ts chat-stream-head
+      if sent.ns-complete then
+        let settled = web-mux-settle (sent.ns-transport)
+        in ChatMux { cm-mux = chat-mux-set-conn m idx settled srv [] (m.served + 1), cm-state = cm.cm-state, cm-streams = list-push (cm.cm-streams) (chat-conn-key settled), cm-page = cm.cm-page, cm-changed = cm.cm-changed }
+      else act
+        closed <- flush-transport-outbox (transport-close (web-mux-settle (sent.ns-transport)))
+        chat-mux-drop cm idx
+      end
+    end
+
+ WebServer's drain, with the chat's state threaded through it: the whole
+ requests in `pending` are answered in order, and a partial one waits on
+ the connection for the rest. A stream's peer sends only acknowledgements,
+ which arrive here as nothing pending and reset its idle count.
+
+  chat-mux-drain : ChatMux, Integer, TcpTransportState, WebState, List Integer -> [Console, Network.Read, Network.Write, Device.Block] ChatMux
+  chat-mux-drain (cm) (idx) (ts) (srv) (pending) =
+    let m = cm.cm-mux
+    in let plen = list-length pending
+    in let total = wb-request-total pending plen
+    in if total < 0 then
+      if web-mux-pending-held m idx 0 plen > web-mux-pending-budget then act
+        refused <- web-mux-refuse m idx ts
+        chat-with-mux cm refused
+      end
+      else chat-with-mux cm (chat-mux-set-conn m idx ts srv pending (m.served))
+    else let req = http-parse-request (wb-slice pending 0 total [])
+    in let rest = wb-slice pending total plen []
+    in let p = chat-path-only (req.path)
+    in if p == chat-events-path then act
+      print-line-uni ("stream opened, " & show (list-length (cm.cm-streams) + 1) & " open")
+      chat-open-stream cm idx ts srv
+    end
+    else if chat-is-page p then chat-mux-reply cm idx ts srv rest (cm.cm-page) (cm.cm-state) False p
+    else act
+      answer <- chat-answer (cm.cm-state) req
+      chat-mux-reply cm idx ts srv rest (http-encode (answer.an-resp)) (answer.an-state) (chat-changes p) p
+    end
+
+  chat-mux-reply : ChatMux, Integer, TcpTransportState, WebState, List Integer, List Integer, ChatState, Boolean, Text -> [Console, Network.Read, Network.Write, Device.Block] ChatMux
+  chat-mux-reply (cm) (idx) (ts) (srv) (rest) (bytes) (st) (changed) (p) =
+    let m = cm.cm-mux
+    in act
+      sent <- net-io-send-raw-checked ts bytes
+      print-line-uni (p & " " & show (sent.ns-sent) & " bytes" & (if sent.ns-complete then "" else " (incomplete)"))
+      ts2 <- if sent.ns-complete then sent.ns-transport else net-io-close (sent.ns-transport)
+      let cm2 = ChatMux { cm-mux = WebMux { listen = m.listen, conns = m.conns, served = m.served + 1 }, cm-state = st, cm-streams = cm.cm-streams, cm-page = cm.cm-page, cm-changed = cm.cm-changed | changed }
+      in chat-mux-drain cm2 idx (web-mux-settle ts2) srv (rest & web-mux-fed ts2)
+    end
+
+  chat-mux-serve : ChatMux, Integer, List Integer, Integer -> [Console, Network.Read, Network.Write, Device.Block] ChatMux
+  chat-mux-serve (cm) (idx) (frame) (stop) =
+    let m = cm.cm-mux
+    in let c = list-at (m.conns) idx
+    in let r = net-process-frame-within ((c.transport).session) frame stop
+    in let ts1 = transport-set-session (c.transport) (r.session)
+    in act
+      ts2 <- flush-transport-outbox ts1
+      if web-conn-closing ts2 then act
+        ts3 <- flush-transport-outbox (transport-close ts2)
+        chat-mux-drop cm idx
+      end
+      else
+        chat-mux-drain cm idx ts2 (c.server) ((c.pending) & (transport-slice (r.data) (r.data-off) (r.data-stop)))
+    end
+
+  chat-mux-accept : ChatMux, List Integer, Integer, Integer -> [Network.Read, Network.Write] ChatMux
+  chat-mux-accept (cm) (frame) (stop) (port) =
+    let m = cm.cm-mux
+    in if list-length (m.conns) >= web-mux-max-conns then cm
+    else act
+      m1 <- web-mux-accept-configured m frame stop port [0, 0, 0, 0]
+      chat-with-mux cm m1
+    end
+
+ WebServer's feed, frame by frame: ARP to the listener, a segment to the
+ connection that owns it, a SYN to the port a new connection.
+
+  chat-mux-feed : ChatMux, List Integer, Integer, Integer -> [Console, Network.Read, Network.Write, Device.Block] ChatMux
+  chat-mux-feed (cm) (frame) (stop) (port) =
+    let m = cm.cm-mux
+    in if eth-ethertype-within frame stop == eth-type-arp then
+      let r = net-process-frame-within ((m.listen).session) frame stop
+      in act
+        ts <- flush-transport-outbox (transport-set-session (m.listen) (r.session))
+        chat-with-mux cm (WebMux { listen = ts, conns = m.conns, served = m.served })
+      end
+    else if web-frame-valid frame stop == False then cm
+    else if ip-equal (ip-dst-at frame eth-header-size) (((m.listen).session).local-ip) == False then cm
+    else let seg = frame-seg-within frame stop
+    in let owner = web-mux-owner-from (m.conns) seg (ip-src-at frame eth-header-size) 0
+    in if owner >= 0 then chat-mux-serve cm owner frame stop
+    else if seg.dst-port == port then
+      if tcp-has-flag seg tcp-flag-syn then chat-mux-accept cm frame stop port
+      else cm
+    else cm
+
+ Pings, then WebServer's sweep: retransmits, closing connections removed,
+ idle ones reaped. A stream that was pinged is not idle.
+
+  chat-mux-sweep : ChatMux -> [Network.Read, Network.Write] ChatMux
+  chat-mux-sweep (cm) = act
+    pinged <- chat-push cm chat-ping-frame 0
+    m1 <- web-mux-sweep (pinged.cm-mux) 0
+    ChatMux { cm-mux = m1, cm-state = pinged.cm-state, cm-streams = chat-live-keys (pinged.cm-streams) (m1.conns) 0 [], cm-page = pinged.cm-page, cm-changed = pinged.cm-changed }
   end
 
-  chat-serve-loop : ChatState, Integer -> [Console, Network.Read, Network.Write, Device.Block] Integer
-  chat-serve-loop (st) (count) = act
-    r <- chat-serve-one st
-    print-line-uni ("serve " & show count & " " & r.sv-diag)
-    chat-serve-loop (r.sv-state) (count + 1)
-  end
+ WebServer's compaction copies the mux into an arena and gives back
+ everything above the loop's mark, the chat's state included. The disk is
+ the state's copy: every change is saved before it is answered, and a
+ failed save keeps the state the disk has, so the state read back is the
+ state that was in hand. The stream list is copied beside the mux.
+
+  chat-mux-compact : ChatMux, Integer, Integer -> [Device.Block] ChatMux
+  chat-mux-compact (cm) (set) (mark) =
+    if __heap-save - mark <= net-compact-bytes then cm
+    else let h0 = __heap-save
+    in let probe = nc-webmux (cm.cm-mux)
+    in let probe-keys = nc-ints (cm.cm-streams)
+    in let size = __heap-save - h0
+    in if size > net-arena-bytes then let dropped = __heap-restore h0 in cm
+    else let target = nc-set-target set
+    in let into = __heap-restore (nc-arena-at set target)
+    in let copy = nc-webmux (cm.cm-mux)
+    in let keys = nc-ints (cm.cm-streams)
+    in let back = __heap-restore mark
+    in let committed = nc-set-commit set target
+    in act
+      st <- chat-store-load
+      ChatMux { cm-mux = copy, cm-state = st, cm-streams = keys, cm-page = cm.cm-page, cm-changed = False }
+    end
+
+ WebServer's loop, which serves forever: its give-up after fifty million
+ idle polls is a test server's, and a chat waits for its people.
+
+  chat-mux-run : ChatMux, Integer, Integer, Integer, List Integer, Integer, Integer -> [Console, Network.Read, Network.Write, Device.Block] Integer
+  chat-mux-run (cm) (port) (tries) (since) (rx) (set) (mark) =
+    if list-length rx == 0 then let s = nc-set-acquire (nc-pool-cell process-get-pid)
+    in let send-set = nc-set-release (nc-set-acquire (nc-pool-cell process-get-pid))
+    in let rx1 = net-io-rx rx
+    in let mk = __heap-save
+    in chat-mux-run cm port tries since rx1 s mk
+    else if since >= web-sweep-interval then act
+      cm1 <- chat-mux-sweep cm
+      cm2 <- chat-mux-compact cm1 set mark
+      chat-mux-run cm2 port (tries + 1) 0 rx set mark
+    end
+    else let hp = __heap-save
+    in act
+      n <- net-driver-recv-into rx
+      if n == 0 then let restored = __heap-restore hp
+      in let y = process-yield
+      in let w = web-idle-wait tries
+      in chat-mux-run cm port (tries + 1 + w) (since + 1 + w) rx set mark
+      else act
+        cm1 <- chat-mux-feed cm rx n port
+        cm2 <- chat-mux-announce cm1
+        cm3 <- chat-mux-compact cm2 set mark
+        chat-mux-run cm3 port 0 (since + 1) rx set mark
+      end
+    end
 
 Section: Entry
+
+  chat-port : Integer = 9200
 
   opening : [Console, Network.Read, Network.Write, Device.Block] Nothing
   opening = act
     st <- chat-store-load
-    print-line-uni ("codex-chat: " & show (list-length (st.cs-accounts)) & " names claimed; listening on guest port 9200")
-    served <- chat-serve-loop st 0
-    print-line-uni ("codex-chat closed after " & show served)
+    page <- chat-page-bytes
+    print-line-uni ("codex-chat: " & show (list-length (st.cs-accounts)) & " names claimed; page " & show (list-length page) & " bytes; listening on guest port " & show chat-port)
+    let m0 = WebMux { listen = net-io-listen (fresh-listen-transport chat-port), conns = [], served = 0 }
+    in act
+      served <- chat-mux-run (ChatMux { cm-mux = m0, cm-state = st, cm-streams = [], cm-page = page, cm-changed = False }) chat-port 0 0 [] 0 0
+      print-line-uni ("codex-chat closed after " & show served)
+    end
   end
