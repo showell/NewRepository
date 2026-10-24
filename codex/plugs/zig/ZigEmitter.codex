@@ -1082,6 +1082,16 @@ Section: Builtin Emitter
      & "; _ = cx_poke_32(_qb" & n & ", _qo" & n & ", _qv" & n
      & "); break :" & zig-label d & " cx_poke_32(_qb" & n & ", _qo" & n & " + 4, _qv" & n & " >> 32); }"
 
+ peek-16 is two peek-bytes, the little-endian word unsigned, as x86's movzx
+ reads it; it too takes no part.
+
+  zig-peek-16 : List IRExpr, ZigCtx, Integer -> Text
+  zig-peek-16 (args) (ctx) (d) =
+    let n = integer-to-text d
+    in zig-label d & ": { const _pb" & n & ": i64 = " & emit-zig-expr (list-at args 0) ctx (d + 1)
+     & "; const _po" & n & ": i64 = " & emit-zig-expr (list-at args 1) ctx (d + 1)
+     & "; break :" & zig-label d & " cx_peek_byte(_pb" & n & ", _po" & n & ") + 256 * cx_peek_byte(_pb" & n & ", _po" & n & " + 1); }"
+
  Text is CCE in the interior -- on bare metal, in the C# plug and here --
  because CCE is codex semantics and not a runtime encoding choice: `E` IS
  39, and CCE orders letters by frequency, so a plug holding UTF-8 would
@@ -1391,6 +1401,10 @@ Section: Builtin Emitter
      ZigBuiltinEmitter {
        name = "peek-qword",
        emit = \args ctx d ty -> "cx_peek_qword(" & emit-zig-expr (list-at args 0) ctx (d + 1) & ", " & emit-zig-expr (list-at args 1) ctx (d + 1) & ")"
+     },
+     ZigBuiltinEmitter {
+       name = "peek-16",
+       emit = \args ctx d ty -> zig-peek-16 args ctx d
      },
      ZigBuiltinEmitter {
        name = "poke-qword",
