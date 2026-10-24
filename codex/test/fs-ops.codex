@@ -1,0 +1,42 @@
+Chapter: FsOps
+  cites Foreword chapter FileSystem
+
+ The three ops a program keeps its own files with, through the default
+ handlers the compiler installs: make-dir (twice on one path, the second
+ finding it there; once on a path a file holds, which is not a directory),
+ append-file onto a file it makes and then onto the file it has, and
+ list-dir of the directory (a file and a subdirectory, the subdirectory's
+ name with its trailing slash) and of a file (nothing).
+
+ Their scope is the type checker's, as read-text's and write-file's is: a
+ path it cannot prove inside the grant does not compile
+ (codex/test/errors/fs-ops-computed-scope).
+
+Section: Entry
+
+  opening : [Console, FileSystem.Read "OPS", FileSystem.Write "OPS"] Nothing
+  opening = act
+    a <- make-dir "OPS"
+    b <- make-dir "OPS"
+    c <- make-dir "OPS/SUB"
+    print-line-uni ("make-dir " & show a & " " & show b & " " & show c)
+
+    d <- append-file "OPS/LOG.TXT" "one,"
+    e <- append-file "OPS/LOG.TXT" "two"
+    log <- read-text "OPS/LOG.TXT"
+    print-line-uni ("append-file " & show d & " " & show e & " reads " & log)
+
+    f <- make-dir "OPS/LOG.TXT"
+    print-line-uni ("make-dir on a file " & show f)
+
+    names <- list-dir "OPS"
+    none <- list-dir "OPS/LOG.TXT"
+    print-line-uni ("list-dir OPS: " & ops-joined names 0 "" & "; of a file: " & show (list-length none))
+  end
+
+Section: Reporting
+
+  ops-joined : List Text, Integer, Text -> Text
+  ops-joined (xs) (i) (acc) =
+    if i >= list-length xs then acc
+    else ops-joined xs (i + 1) (if i == 0 then list-at xs i else acc & " " & list-at xs i)

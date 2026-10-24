@@ -1,0 +1,29 @@
+Chapter: FsOpsComputedScope
+  cites Foreword chapter FileSystem
+
+ A grant over "OPS" binds append-file, make-dir and list-dir as it binds
+ write-file and read-text, through their rows in the type checker's
+ scoped-op-effect: a literal path is checked against the grant, and a path
+ the checker cannot see is refused. Here each op is given one of each, a
+ literal outside "OPS" and a computed path, and all six are refused
+ (CDX4002). fs-ops is the other half: literal paths inside the grant
+ compile and run, which without those rows they did not (every call was
+ refused as having no scope of its own).
+
+Section: Paths The Checker Cannot See
+
+  outside : Integer -> Text
+  outside (n) = "ELSE" & show n & ".TXT"
+
+Section: Entry
+
+  opening : [Console, FileSystem.Read "OPS", FileSystem.Write "OPS"] Nothing
+  opening = act
+    a <- append-file "ELSE.TXT" "no"
+    b <- make-dir "ELSE"
+    c <- list-dir "ELSE"
+    d <- append-file (outside 0) "no"
+    e <- make-dir (outside 1)
+    f <- list-dir (outside 2)
+    print-line-uni (show a & show b & show (list-length c) & show d & show e & show (list-length f))
+  end
