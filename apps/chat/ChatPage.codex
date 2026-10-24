@@ -26,9 +26,11 @@ Section: Sidebar
   sidebar-tree : Integer -> WidgetNode
   sidebar-tree (x) =
     let view = state-get sk-view
+    in let me = state-get-text sk-my-name
     in widget-box "sidebar" "sidebar" [
       widget-box "sidebar-hdr" "sidebar-hdr" [
         widget-add-child (widget-custom "brand" "box:brand" 0 0) (widget-label "brand-t" "CodexChat"),
+        widget-label "whoami" (if me == "" then "" else "You are " & me),
         widget-button "new-conv" "+"
       ],
       widget-box "search-box" "sidebar-search" [
@@ -273,7 +275,7 @@ Section: Handlers
 
   new-conversation : Integer -> Integer
   new-conversation (x) =
-    show-prompt "New Conversation" "Enter username:" "username" new-conv-cb
+    show-prompt "Talk to someone" "Who do you want to talk to? Enter their name:" "their name" new-conv-cb
 
   new-conv-cb : Text -> Integer
   new-conv-cb (name) =
@@ -288,8 +290,8 @@ Section: Handlers
   start-conv-cb : Text -> Integer
   start-conv-cb (resp) =
     let err = json-obj-field (json-parse-obj resp) "error"
-    in if err == "no such user" then show-alert "New Conversation" "Nobody has claimed that name yet." alert-done
-    else if text-length err > 0 then show-alert "New Conversation" err alert-done
+    in if err == "no such user" then show-alert "Talk to someone" "Nobody has claimed that name yet." alert-done
+    else if text-length err > 0 then show-alert "Talk to someone" err alert-done
     else let r = load-conversations 0
     in request-render 0
 
@@ -447,7 +449,7 @@ Section: Auth
 
   show-login : Integer -> Integer
   show-login (x) =
-    show-prompt "Welcome to CodexChat" "Choose a username:" "your name" login-cb
+    show-prompt "Claim your name" "Choose a name for yourself. Once claimed, it is yours alone:" "your name" login-cb
 
   login-cb : Text -> Integer
   login-cb (name) =
@@ -464,7 +466,7 @@ Section: Auth
     in let tok = json-obj-field obj "token"
     in if tok == "" then
       (if json-obj-field obj "error" == "name taken"
-       then show-prompt "Welcome to CodexChat" "That name is taken. Choose another:" "your name" login-cb
+       then show-prompt "Claim your name" "That name is already claimed. Choose another:" "your name" login-cb
        else show-login 0)
     else let s1 = local-storage-set "chat-token" tok
     in let s2 = state-set-text "token" tok
