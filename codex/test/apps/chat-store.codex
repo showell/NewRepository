@@ -3,7 +3,7 @@ Chapter: ChatStoreSession
   cites Chat chapter ChatStore
   cites Works chapter Http
   cites Foreword chapter Console
-  cites Foreword chapter Fat16
+  cites Foreword chapter FileSystem
 
  One boot of a chat server that keeps its state on disk, saving after every
  request that changes it, as a host does. The first boot claims alice and
@@ -35,7 +35,7 @@ Section: Requests
     sr-saved : Boolean
   }
 
-  step : ChatState, Text, Text -> [Device.Block] StepResult
+  step : ChatState, Text, Text -> [FileSystem.Write] StepResult
   step (st) (tok) (path) =
     let mark = chat-store-mark st
     in let (st2, resp) = chat-route st (boot-host tok) (chat-get path)
@@ -44,7 +44,7 @@ Section: Requests
       StepResult { sr-state = st2, sr-saved = ok }
     end
 
-  first-boot : ChatState -> [Device.Block] StepResult
+  first-boot : ChatState -> [FileSystem.Write] StepResult
   first-boot (st) = act
     a <- step st "tok-alice" "/api/chat/register?name=alice"
     b <- step (a.sr-state) "tok-bob" "/api/chat/register?name=bob"
@@ -53,7 +53,7 @@ Section: Requests
     StepResult { sr-state = d.sr-state, sr-saved = a.sr-saved & b.sr-saved & c.sr-saved & d.sr-saved }
   end
 
-  every-boot : ChatState, Integer -> [Device.Block] StepResult
+  every-boot : ChatState, Integer -> [FileSystem.Write] StepResult
   every-boot (st) (boot) = act
     a <- step st "" ("/api/chat/send?t=tok-alice&to=c1&body=alice+boot+" & show boot)
     b <- step (a.sr-state) "" ("/api/chat/send?t=tok-bob&to=c1&body=bob+boot+" & show boot)
@@ -93,7 +93,7 @@ Section: What Each Sees
 
 Section: Entry
 
-  opening : [Console, Device.Block] Nothing
+  opening : [Console, FileSystem.Read, FileSystem.Write] Nothing
   opening = act
     loaded <- chat-store-load
     let before = loaded.sl-state
@@ -107,9 +107,9 @@ Section: Entry
       print-line-uni ("on disk: " & counts (again.sl-state))
       print-line-uni ("read back is the state in hand: " & show (views (again.sl-state) == views (sent.sr-state)))
       print-line-uni (views (again.sl-state))
-      users <- list-files "codex-chat/users" ""
-      convs <- list-directories "codex-chat/convs"
-      files <- list-files "codex-chat/convs/c1" ""
+      users <- list-dir "codex-chat/users"
+      convs <- list-dir "codex-chat/convs"
+      files <- list-dir "codex-chat/convs/c1"
       print-line-uni ("users: " & joined users 0 "" & "; convs: " & joined convs 0 "" & "; c1: " & joined files 0 "")
     end
   end

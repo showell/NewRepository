@@ -11,6 +11,7 @@ Chapter: ChatServe
   cites Net chapter Tcp
   cites Works chapter Http
   cites Foreword chapter Fat16
+  cites Foreword chapter FileSystem
   cites Foreword chapter Random
   cites Foreword chapter CCE
   cites Foreword chapter Tuple
@@ -21,9 +22,11 @@ Chapter: ChatServe
  -portfwd <host>:9200, or QEMU's hostfwd to it) and serves every connection
  at once on WebServer's concurrent loop, WebMux: a page, the API calls of
  every open page, and each page's event stream. The state is ChatStore's,
- read off the boot volume once and written after every request that changes
- it, so a reboot finds the chat it left. The page is on the same disk:
- CHAT.HTM, ChatPage as the HTML plug builds it, served at `/`.
+ read once and written after every request that changes it, through the
+ FileSystem effect, whose default handlers keep it on the boot volume, so a
+ reboot finds the chat it left. The page is on the same disk: CHAT.HTM,
+ ChatPage as the HTML plug builds it, served at `/` as the file's own bytes
+ (the one thing here that reads the disk itself).
 
  What ChatServer asks of its host this shell answers from the machine. A
  token is a word from the processor's random number generator, in 16 hex
@@ -105,7 +108,7 @@ Section: Answering
  does not, and the state before it is gone with it, so the state is read
  back from the disk: what was committed, and nothing else.
 
-  chat-answer : ChatState, HttpRequest -> [Device.Block] ChatAnswer
+  chat-answer : ChatState, HttpRequest -> [FileSystem.Read, FileSystem.Write] ChatAnswer
   chat-answer (st) (req) =
     let p = chat-path-only (req.path)
     in let tok = chat-fresh-token 0
@@ -255,7 +258,7 @@ Section: The Chat Mux
  the connection for the rest. A stream's peer sends only acknowledgements,
  which arrive here as nothing pending and reset its idle count.
 
-  chat-mux-drain : ChatMux, Integer, TcpTransportState, WebState, List Integer -> [Console, Network.Read, Network.Write, Device.Block] ChatMux
+  chat-mux-drain : ChatMux, Integer, TcpTransportState, WebState, List Integer -> [Console, Network.Read, Network.Write, FileSystem.Read, FileSystem.Write] ChatMux
   chat-mux-drain (cm) (idx) (ts) (srv) (pending) =
     let m = cm.cm-mux
     in let plen = list-length pending
@@ -279,7 +282,7 @@ Section: The Chat Mux
       chat-mux-reply cm idx ts srv rest (http-encode (answer.an-resp)) (answer.an-state) (chat-changes p) p
     end
 
-  chat-mux-reply : ChatMux, Integer, TcpTransportState, WebState, List Integer, List Integer, ChatState, Boolean, Text -> [Console, Network.Read, Network.Write, Device.Block] ChatMux
+  chat-mux-reply : ChatMux, Integer, TcpTransportState, WebState, List Integer, List Integer, ChatState, Boolean, Text -> [Console, Network.Read, Network.Write, FileSystem.Read, FileSystem.Write] ChatMux
   chat-mux-reply (cm) (idx) (ts) (srv) (rest) (bytes) (st) (changed) (p) =
     let m = cm.cm-mux
     in act
@@ -290,7 +293,7 @@ Section: The Chat Mux
       in chat-mux-drain cm2 idx (web-mux-settle ts2) srv (rest & web-mux-fed ts2)
     end
 
-  chat-mux-serve : ChatMux, Integer, List Integer, Integer -> [Console, Network.Read, Network.Write, Device.Block] ChatMux
+  chat-mux-serve : ChatMux, Integer, List Integer, Integer -> [Console, Network.Read, Network.Write, FileSystem.Read, FileSystem.Write] ChatMux
   chat-mux-serve (cm) (idx) (frame) (stop) =
     let m = cm.cm-mux
     in let c = list-at (m.conns) idx
@@ -318,7 +321,7 @@ Section: The Chat Mux
  WebServer's feed, frame by frame: ARP to the listener, a segment to the
  connection that owns it, a SYN to the port a new connection.
 
-  chat-mux-feed : ChatMux, List Integer, Integer, Integer -> [Console, Network.Read, Network.Write, Device.Block] ChatMux
+  chat-mux-feed : ChatMux, List Integer, Integer, Integer -> [Console, Network.Read, Network.Write, FileSystem.Read, FileSystem.Write] ChatMux
   chat-mux-feed (cm) (frame) (stop) (port) =
     let m = cm.cm-mux
     in if eth-ethertype-within frame stop == eth-type-arp then
@@ -355,7 +358,7 @@ Section: The Chat Mux
  disk passed its reading when the server started, and only this server
  has written it since.
 
-  chat-mux-compact : ChatMux, Integer, Integer -> [Device.Block] ChatMux
+  chat-mux-compact : ChatMux, Integer, Integer -> [FileSystem.Read, FileSystem.Write] ChatMux
   chat-mux-compact (cm) (set) (mark) =
     if __heap-save - mark <= net-compact-bytes then cm
     else let h0 = __heap-save
@@ -377,7 +380,7 @@ Section: The Chat Mux
  WebServer's loop, which serves forever: its give-up after fifty million
  idle polls is a test server's, and a chat waits for its people.
 
-  chat-mux-run : ChatMux, Integer, Integer, Integer, List Integer, Integer, Integer -> [Console, Network.Read, Network.Write, Device.Block] Integer
+  chat-mux-run : ChatMux, Integer, Integer, Integer, List Integer, Integer, Integer -> [Console, Network.Read, Network.Write, FileSystem.Read, FileSystem.Write] Integer
   chat-mux-run (cm) (port) (tries) (since) (rx) (set) (mark) =
     if list-length rx == 0 then let s = nc-set-acquire (nc-pool-cell process-get-pid)
     in let send-set = nc-set-release (nc-set-acquire (nc-pool-cell process-get-pid))
@@ -411,14 +414,14 @@ Section: Entry
  A disk the store will not trust with the next write is not served: the
  server says why and stops, and the disk is left as it was found.
 
-  opening : [Console, Network.Read, Network.Write, Device.Block] Nothing
+  opening : [Console, Network.Read, Network.Write, Device.Block, FileSystem.Read, FileSystem.Write] Nothing
   opening = act
     loaded <- chat-store-load
     if text-length (loaded.sl-problem) > 0 then print-line-uni ("codex-chat: not serving: " & loaded.sl-problem)
     else chat-serve-from (loaded.sl-state)
   end
 
-  chat-serve-from : ChatState -> [Console, Network.Read, Network.Write, Device.Block] Nothing
+  chat-serve-from : ChatState -> [Console, Network.Read, Network.Write, Device.Block, FileSystem.Read, FileSystem.Write] Nothing
   chat-serve-from (st) = act
     page <- chat-page-bytes
     print-line-uni ("codex-chat: " & show (list-length (st.cs-accounts)) & " names claimed, " & show (list-length (st.cs-convs)) & " conversations; page " & show (list-length page) & " bytes; listening on guest port " & show chat-port)
