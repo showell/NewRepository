@@ -265,7 +265,7 @@ Section: Handlers
     else let conv-id = state-get-text ("conv-id-" & show active)
     in let body = url-encode msg
     in let tok = state-get-text "token"
-    in let r = fetch-then ("/api/chat/send?t=" & tok & "&to=" & conv-id & "&body=" & body) "POST" "" send-cb
+    in let r = fetch-then (chat-api & "send?t=" & tok & "&to=" & conv-id & "&body=" & body) "POST" "" send-cb
     in let s = state-set-text-render sk-compose ""
     in 0
 
@@ -282,7 +282,7 @@ Section: Handlers
   new-conv-cb (name) =
     if name == "" then 0
     else let tok = state-get-text "token"
-    in let r = fetch-get-then ("/api/chat/start?t=" & tok & "&with=" & url-encode name) start-conv-cb
+    in let r = fetch-get-then (chat-api & "start?t=" & tok & "&with=" & url-encode name) start-conv-cb
     in 0
 
  Only a claimed name can be talked to; the server says so of any other,
@@ -339,10 +339,16 @@ Section: Handlers
 
 Section: Data Loading
 
+ The API is asked for relative to the page, so the page works wherever it
+ is served: at `/` on its own server, or at `/codex-chat/` on a site it
+ shares with other applications, whose host strips the prefix.
+
+  chat-api : Text = "api/chat/"
+
   load-conversations : Integer -> Integer
   load-conversations (x) =
     let tok = state-get-text "token"
-    in fetch-get-then ("/api/chat/conversations?t=" & tok) convs-cb
+    in fetch-get-then (chat-api & "conversations?t=" & tok) convs-cb
 
  A change on the server asks for the list too, so a conversation someone
  else starts with you shows up without a reload; an answer the same as the
@@ -378,7 +384,7 @@ Section: Data Loading
     in if active < 0 then 0
     else let tok = state-get-text "token"
     in let conv-id = state-get-text ("conv-id-" & show active)
-    in fetch-get-then ("/api/chat/messages?t=" & tok & "&conv=" & conv-id) msgs-cb
+    in fetch-get-then (chat-api & "messages?t=" & tok & "&conv=" & conv-id) msgs-cb
 
  A render rebuilds the page, the compose bar with it, so a render while
  someone types takes the input away from them. A change on the server asks
@@ -414,7 +420,7 @@ Section: Data Loading
   load-contacts : Integer -> Integer
   load-contacts (x) =
     let tok = state-get-text "token"
-    in fetch-get-then ("/api/chat/contacts?t=" & tok) contacts-cb
+    in fetch-get-then (chat-api & "contacts?t=" & tok) contacts-cb
 
   contacts-cb : Text -> Integer
   contacts-cb (resp) =
@@ -437,10 +443,10 @@ Section: Auth
 
   check-auth : Integer -> Integer
   check-auth (x) =
-    let tok = local-storage-get "chat-token"
+    let tok = local-storage-get "codex-chat-token"
     in if tok == "" then show-login 0
     else let s = state-set-text "token" tok
-    in let r = fetch-get-then ("/api/chat/me?t=" & url-encode tok) me-cb
+    in let r = fetch-get-then (chat-api & "me?t=" & url-encode tok) me-cb
     in 0
 
   me-cb : Text -> Integer
@@ -461,7 +467,7 @@ Section: Auth
   login-cb : Text -> Integer
   login-cb (name) =
     if name == "" then show-login 0
-    else let r = fetch-get-then ("/api/chat/register?name=" & url-encode name) register-cb
+    else let r = fetch-get-then (chat-api & "register?name=" & url-encode name) register-cb
     in 0
 
  A name is claimed by the first to ask for it; asking for one already
@@ -475,7 +481,7 @@ Section: Auth
       (if json-obj-field obj "error" == "name taken"
        then show-prompt "Claim your name" "That name is already claimed. Choose another:" "your name" login-cb
        else show-login 0)
-    else let s1 = local-storage-set "chat-token" tok
+    else let s1 = local-storage-set "codex-chat-token" tok
     in let s2 = state-set-text "token" tok
     in let r = check-auth 0
     in 0
@@ -553,7 +559,7 @@ Section: Entry
     in let s3 = set-render render-chat
     in let h = register-handlers no-pick chat-click
     in let r = render-chat 0
-    in let p = event-source-then "/api/chat/events" on-chat-event
+    in let p = event-source-then (chat-api & "events") on-chat-event
     in check-auth 0
   end
 
