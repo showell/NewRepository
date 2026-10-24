@@ -1,0 +1,113 @@
+Chapter: TownWatch
+  cites Uoaix chapter CrownFunding
+  cites Uoaix chapter TownLiveCodec
+  cites Encode chapter Json
+
+ Britain's town as TownLiveProof builds it (three residents, their shops
+ and shared lodging, on a flat 128 by 224 map), kept by a host between
+ calls: built once, its game clock advanced on request, and what a watcher
+ draws, as JSON. The town is in `towns`, empty when it could not be built,
+ and `problem` says why.
+
+  TownWatch = record { towns : List TownLive, maps : List WalkMap, problem : Text }
+
+  tw-failed : Text -> TownWatch
+  tw-failed (why) = TownWatch { towns = [], maps = [], problem = why }
+
+  tw-fill : WalkMap, Integer -> Boolean
+  tw-fill (map) (i) = if i == map.width * map.height then True
+    else let mark = __heap-save
+    in let ok = is-ok (walk-set-land map (map.x + int-mod i map.width) (map.y + i / map.width) 0 0)
+    in let restored = __heap-restore mark in ok & tw-fill map (i + 1)
+
+  tw-populate : GameShard, WalkMap, EuCurrency -> TownWatch
+  tw-populate (game) (map) (currency) = let v = gv-new game currency
+    in let items = gsi-new game.world
+    in let growing = bb-fixture-grow v items
+    in when bb-populate v items map
+      is Err (e) -> tw-failed ("shops " & e)
+      is Ok (_) -> when tl-populate v items map None 0 3
+        is Err (e) -> tw-failed ("population " & e)
+        is Ok (t) -> TownWatch { towns = [t], maps = [map], problem = "" }
+
+  tw-new : Integer -> TownWatch
+  tw-new (unused) = when bb-economy 0
+    is Err (e) -> tw-failed ("economy " & e)
+    is Ok (currency) -> if cf-fund-crown currency 10 10 1 < 0 then tw-failed "crown funding" else when world-new 1024
+      is Err (e) -> tw-failed ("world " & e)
+      is Ok (world) -> let shard-accounts = ga-new ga-dev
+        in let chars = ga-working shard-accounts
+        in let game = GameShard { world = world, characters = chars, accounts = shard-accounts, next-key = 305419895, pending-key = 0, active = 0, log = slg-new slg-trace, skills = chs-new 0 }
+        in when walk-map-new 1408 1536 128 224
+          is Err (e) -> tw-failed ("map " & e)
+          is Ok (map) -> if tw-fill map 0 then tw-populate game map currency else tw-failed "terrain"
+
+ Each advance's scratch is given back, as the proof's drain does: the town
+ changes in place.
+
+  tw-drain : TownLive, WalkMap, Integer, Integer -> Boolean
+  tw-drain (t) (map) (seconds) (fuel) = if fuel == 0 then False
+    else if tl-ready t seconds 0 -1 tl-max-seconds < 0 then True
+    else let mark = __heap-save
+    in let ok = is-ok (tl-advance t map None seconds 64)
+    in let restored = __heap-restore mark
+    in ok & tw-drain t map seconds (fuel - 1)
+
+ The town brought to `seconds` of game time, which never goes back: every
+ step due by then taken. False when there is no town or a step failed.
+
+  tw-tick : TownWatch, Integer -> Boolean
+  tw-tick (w) (seconds) = if list-length w.towns == 0 then False
+    else tw-drain (list-at w.towns 0) (list-at w.maps 0) seconds 100
+
+  tw-person : TownLive, Integer -> JsonValue
+  tw-person (t) (i) = let r = list-at t.residents i
+    in let p = tf-person t.people r.person
+    in let at = when world-get t.vendors.game.world p.world-serial
+      is Err (_) -> [json-pair "x" (json-int -1), json-pair "y" (json-int -1)]
+      is Ok (m) -> [json-pair "x" (json-int m.x), json-pair "y" (json-int m.y), json-pair "facing" (json-int r.direction)]
+    in json-object ([json-pair "name" (json-str p.name), json-pair "job" (json-int p.job),
+      json-pair "goal" (json-int r.goal), json-pair "activity" (json-int p.activity)] & at)
+
+  tw-people : TownLive, Integer, List JsonValue -> List JsonValue
+  tw-people (t) (i) (acc) = if i == t.count then acc else tw-people t (i + 1) (acc & [tw-person t i])
+
+ What a watcher draws now: the game time, and where each resident is and
+ what they are about (goal 0 home, 1 work, 2 tavern).
+
+  tw-json : TownWatch, Integer -> Text
+  tw-json (w) (seconds) = if list-length w.towns == 0 then json-emit (json-object [json-pair "problem" (json-str w.problem)])
+    else let t = list-at w.towns 0
+    in json-emit (json-object [json-pair "seconds" (json-int seconds), json-pair "hour" (json-int (int-mod t.people.hour 24)),
+      json-pair "people" (json-array (tw-people t 0 []))])
+
+  tw-shop : BbShop -> JsonValue
+  tw-shop (s) = json-object [json-pair "title" (json-str s.title), json-pair "premises" (json-str s.premises),
+    json-pair "x1" (json-int s.x1), json-pair "y1" (json-int s.y1), json-pair "x2" (json-int s.x2), json-pair "y2" (json-int s.y2)]
+
+  tw-shops : List BbShop, Integer, WalkMap, List JsonValue -> List JsonValue
+  tw-shops (shops) (i) (map) (acc) = if i == list-length shops then acc
+    else let s = list-at shops i
+    in let inside = s.x1 >= map.x & s.x2 < map.x + map.width & s.y1 >= map.y & s.y2 < map.y + map.height
+    in tw-shops shops (i + 1) map (if inside then acc & [tw-shop s] else acc)
+
+ The map, once: its bounds and the shops inside it.
+
+  tw-map-json : TownWatch -> Text
+  tw-map-json (w) = if list-length w.maps == 0 then json-emit (json-object [json-pair "problem" (json-str w.problem)])
+    else let map = list-at w.maps 0
+    in json-emit (json-object [json-pair "x" (json-int map.x), json-pair "y" (json-int map.y),
+      json-pair "width" (json-int map.width), json-pair "height" (json-int map.height),
+      json-pair "shops" (json-array (tw-shops bb-shops 0 map []))])
+
+ A program running the town for its first ticks: what keeps exactly the
+ definitions a host calls when this chapter is built as a library, which
+ has no opening of its own to keep them. tw-tick is called twice: the
+ emitter inlines a definition this small that has one caller.
+
+  opening : [Console] Nothing = let w = tw-new 0
+    in let ticked = tw-tick w 21600 & tw-tick w 21630
+    in act
+      print-line-uni (tw-map-json w)
+      print-line-uni (tw-json w (if ticked then 21600 else -1))
+    end
