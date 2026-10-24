@@ -3543,15 +3543,28 @@ Section: Apply Emission
   zig-closure-pass-tail (i) (n) =
     if i >= n then "" else ", _cp" & integer-to-text i & zig-closure-pass-tail (i + 1) n
 
-  zig-closure-call-body : Text, Integer, Text, Integer, Integer, Integer, Text -> Text
-  zig-closure-call-body (n) (nargs) (ev) (flat) (rem) (d) (targs) =
+  zig-closure-call-body : Text, Integer, Text, Integer, Integer, Integer, Text, Boolean -> Text
+  zig-closure-call-body (n) (nargs) (ev) (flat) (rem) (d) (targs) (fails) =
     if flat >= rem
-    then "return " & zig-sanitize n & "(" & targs & zig-closure-env-refs ev nargs 0
-       & zig-closure-pass rem 0 & ");"
+    then "return " & zig-closure-fail-exit fails (zig-sanitize n & "(" & targs & zig-closure-env-refs ev nargs 0
+       & zig-closure-pass rem 0 & ")") & ";"
     else let w = "_w" & integer-to-text d
-    in "const " & w & " = " & zig-sanitize n & "(" & targs & zig-closure-env-refs ev nargs 0
-     & zig-closure-pass flat 0 & "); return " & w & ".call(" & w & ".ctx"
+    in "const " & w & " = " & zig-closure-fail-exit fails (zig-sanitize n & "(" & targs & zig-closure-env-refs ev nargs 0
+     & zig-closure-pass flat 0 & ")") & "; return " & w & ".call(" & w & ".ctx"
      & zig-closure-pass-tail flat rem & ");"
+
+ A closure's `call` returns its result type bare: a CxFn carries no error,
+ so a callee that can fail hands back an error union the trampoline cannot
+ return. A lambda's closure already runs its body under the "!" handler,
+ where a failure ends the program (zig-lambda-closure); a closure made from
+ a named definition that can fail takes the same rule, at its one call.
+ Update 70's x86 builtin emitters were the first to reach it: a lifted
+ lambda in `builtins` that can fail, whose trampolines returned
+ `anyerror!EmitResult` as `EmitResult` and did not compile.
+
+  zig-closure-fail-exit : Boolean, Text -> Text
+  zig-closure-fail-exit (fails) (call) =
+    if fails then "(" & call & " catch cx_fail_exit())" else call
 
  A GENERIC callee has to be applied here too. The trampoline calls it by
  name, and a name is where an unapplied generic stops being visible: the
@@ -3595,7 +3608,7 @@ Section: Apply Emission
     else "const " & ev & ": *@This() = @ptrCast(@alignCast(" & cx & ")); "
     in lbl & ": { const " & env & " = struct { " & zig-closure-fields args ctx 0
      & "fn call(" & cx & ": *anyopaque, " & zig-closure-params pty 0 (ctx.scope-tvars) & ") " & ret
-     & " { " & unpack & zig-closure-call-body n (list-length args) ev flat rem d targs & " } }; break :"
+     & " { " & unpack & zig-closure-call-body n (list-length args) ev flat rem d targs (zig-in-set (ctx.failing) n) & " } }; break :"
      & lbl & " " & zig-closure-type rem (zig-fn-param-types pty (ctx.scope-tvars)) ret
      & "{ .ctx = cx_new(" & env & "{ " & zig-closure-inits args ctx d 0 & " }), .call = &" & env & ".call }; }"
 
