@@ -1,0 +1,163 @@
+Chapter: ChatStore
+  cites Chat chapter ChatServer
+  cites Encode chapter Json
+  cites Foreword chapter Fat16
+  cites Foreword chapter Maybe
+
+ Codex Chat's state on disk: the whole of it, accounts, conversations and
+ messages and the two counters, as one JSON file on the boot volume's FAT16,
+ written after a change and read when the server starts. apps/chat/web/
+ server.ps1 kept the same state the same way, in data/chat-state.json; this
+ is that file on a disk the chapter drives itself.
+
+ The file is read back with the Json foreword's own parser, which is total:
+ a missing file, or one that does not parse, starts the server with an
+ empty state rather than stopping it, and says nothing a request could not
+ already see.
+
+ Text is written a code point to a byte (fat16-write-file), so a state is
+ kept whole while its names and messages stay within Latin-1.
+
+ We say:
+
+Section: The File
+
+  chat-store-path : Text = "CHAT.JSN"
+
+  chat-store-version : Integer = 1
+
+Section: Saving
+
+  chat-store-save : ChatState -> [Device.Block] Boolean
+  chat-store-save (st) = fat16-write-file chat-store-path (json-emit (chat-state-json st))
+
+  chat-state-json : ChatState -> JsonValue
+  chat-state-json (st) = json-object [
+    json-pair "version" (json-int chat-store-version),
+    json-pair "next-conv" (json-int (st.cs-next-conv)),
+    json-pair "next-msg" (json-int (st.cs-next-msg)),
+    json-pair "accounts" (json-array (chat-accounts-json (st.cs-accounts) 0 [])),
+    json-pair "convs" (json-array (chat-convs-json (st.cs-convs) 0 []))
+  ]
+
+  chat-texts-json : List Text, Integer, List JsonValue -> List JsonValue
+  chat-texts-json (xs) (i) (acc) =
+    if i >= list-length xs then acc
+    else chat-texts-json xs (i + 1) (list-push acc (json-str (list-at xs i)))
+
+  chat-accounts-json : List ChatAccount, Integer, List JsonValue -> List JsonValue
+  chat-accounts-json (accts) (i) (acc) =
+    if i >= list-length accts then acc
+    else let a = list-at accts i
+    in chat-accounts-json accts (i + 1) (list-push acc (json-object [
+      json-pair "name" (json-str (a.ca-name)),
+      json-pair "token" (json-str (a.ca-token)),
+      json-pair "contacts" (json-array (chat-texts-json (a.ca-contacts) 0 [])),
+      json-pair "convs" (json-array (chat-texts-json (a.ca-convs) 0 []))
+    ]))
+
+  chat-convs-json : List ChatConv, Integer, List JsonValue -> List JsonValue
+  chat-convs-json (convs) (i) (acc) =
+    if i >= list-length convs then acc
+    else let c = list-at convs i
+    in chat-convs-json convs (i + 1) (list-push acc (json-object [
+      json-pair "id" (json-str (c.cv-id)),
+      json-pair "kind" (json-str (c.cv-kind)),
+      json-pair "name" (json-str (c.cv-name)),
+      json-pair "members" (json-array (chat-texts-json (c.cv-members) 0 [])),
+      json-pair "messages" (json-array (chat-messages-json (c.cv-messages) 0 []))
+    ]))
+
+  chat-messages-json : List ChatMessage, Integer, List JsonValue -> List JsonValue
+  chat-messages-json (ms) (i) (acc) =
+    if i >= list-length ms then acc
+    else let m = list-at ms i
+    in chat-messages-json ms (i + 1) (list-push acc (json-object [
+      json-pair "id" (json-int (m.cm-id)),
+      json-pair "sender" (json-str (m.cm-sender)),
+      json-pair "body" (json-str (m.cm-body)),
+      json-pair "time" (json-str (m.cm-time))
+    ]))
+
+Section: Loading
+
+  chat-store-load : [Device.Block] ChatState
+  chat-store-load = act
+    vol <- fat16-boot-volume
+    if fat16-vol-is-usable vol == False then chat-state-new
+    else when fat16-read-text vol chat-store-path
+      is Just (t) -> chat-state-of-text t
+      is None -> chat-state-new
+  end
+
+  chat-state-of-text : Text -> ChatState
+  chat-state-of-text (t) =
+    when json-parse t
+      is Just (v) -> chat-state-of-json v
+      is None -> chat-state-new
+
+  chat-state-of-json : JsonValue -> ChatState
+  chat-state-of-json (v) = ChatState {
+    cs-accounts = chat-accounts-of (chat-field v "accounts") 0 [],
+    cs-convs = chat-convs-of (chat-field v "convs") 0 [],
+    cs-next-conv = json-get-int v "next-conv" 1,
+    cs-next-msg = json-get-int v "next-msg" 1
+  }
+
+ A field that is not there reads as an empty array, so a part missing from
+ the file is an empty part of the state.
+
+  chat-field : JsonValue, Text -> JsonValue
+  chat-field (v) (key) =
+    when json-get v key
+      is Just (x) -> x
+      is None -> json-array []
+
+  chat-texts-of : JsonValue, Integer, List Text -> List Text
+  chat-texts-of (arr) (i) (acc) =
+    if i >= json-array-length arr then acc
+    else when json-array-at arr i
+      is Just (x) -> chat-texts-of arr (i + 1) (list-push acc (chat-text-of x))
+      is None -> chat-texts-of arr (i + 1) acc
+
+  chat-text-of : JsonValue -> Text
+  chat-text-of (x) = when x
+    is JsonStr (s) -> s
+    is otherwise -> ""
+
+  chat-accounts-of : JsonValue, Integer, List ChatAccount -> List ChatAccount
+  chat-accounts-of (arr) (i) (acc) =
+    if i >= json-array-length arr then acc
+    else when json-array-at arr i
+      is Just (a) -> chat-accounts-of arr (i + 1) (list-push acc (ChatAccount {
+        ca-name = json-get-str a "name" "",
+        ca-token = json-get-str a "token" "",
+        ca-contacts = chat-texts-of (chat-field a "contacts") 0 [],
+        ca-convs = chat-texts-of (chat-field a "convs") 0 []
+      }))
+      is None -> chat-accounts-of arr (i + 1) acc
+
+  chat-convs-of : JsonValue, Integer, List ChatConv -> List ChatConv
+  chat-convs-of (arr) (i) (acc) =
+    if i >= json-array-length arr then acc
+    else when json-array-at arr i
+      is Just (c) -> chat-convs-of arr (i + 1) (list-push acc (ChatConv {
+        cv-id = json-get-str c "id" "",
+        cv-kind = json-get-str c "kind" "",
+        cv-members = chat-texts-of (chat-field c "members") 0 [],
+        cv-messages = chat-messages-of (chat-field c "messages") 0 [],
+        cv-name = json-get-str c "name" ""
+      }))
+      is None -> chat-convs-of arr (i + 1) acc
+
+  chat-messages-of : JsonValue, Integer, List ChatMessage -> List ChatMessage
+  chat-messages-of (arr) (i) (acc) =
+    if i >= json-array-length arr then acc
+    else when json-array-at arr i
+      is Just (m) -> chat-messages-of arr (i + 1) (list-push acc (ChatMessage {
+        cm-id = json-get-int m "id" 0,
+        cm-sender = json-get-str m "sender" "",
+        cm-body = json-get-str m "body" "",
+        cm-time = json-get-str m "time" ""
+      }))
+      is None -> chat-messages-of arr (i + 1) acc

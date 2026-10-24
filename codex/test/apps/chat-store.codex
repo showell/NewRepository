@@ -1,0 +1,58 @@
+Chapter: ChatStoreSession
+  cites Chat chapter ChatServer
+  cites Chat chapter ChatStore
+  cites Works chapter Http
+  cites Foreword chapter Console
+  cites Foreword chapter Fat16
+
+ One boot of a chat server that keeps its state on disk. It loads what the
+ disk holds and says how much; registers the next user, user-<n>, the
+ first boot also making the group `log`; posts `boot <n>` to it; saves; and
+ reads the state back off the disk to list the log as user-0 sees it.
+
+ On a fresh volume that is one account and one message. Booted again on the
+ same disk, each boot finds the ones before it: the second loads one
+ account and one message and lists two.
+
+ We say:
+
+Section: One Boot
+
+  chat-get : Text -> HttpRequest
+  chat-get (path) = HttpRequest { method = "GET", path = path, body = "", valid = True }
+
+  boot-host : Integer -> ChatHost
+  boot-host (n) = ChatHost { ch-time = "10:0" & show n, ch-token = "tok-" & show n, ch-token-2 = "unused" }
+
+  boot-step : ChatState -> ChatState
+  boot-step (st) =
+    let n = list-length (st.cs-accounts)
+    in let host = boot-host n
+    in let (s1, r1) = chat-route st host (chat-get ("/api/chat/register?name=user-" & show n))
+    in let (s2, r2) = if n == 0 then chat-route s1 host (chat-get "/api/chat/group?t=tok-0&name=log") else (s1, r1)
+    in let (s3, r3) = chat-route s2 host (chat-get ("/api/chat/send?t=tok-" & show n & "&to=c1&body=boot+" & show n))
+    in s3
+
+  message-total : ChatState -> Integer
+  message-total (st) = message-total-loop (st.cs-convs) 0 0
+
+  message-total-loop : List ChatConv, Integer, Integer -> Integer
+  message-total-loop (cs) (i) (acc) =
+    if i >= list-length cs then acc
+    else message-total-loop cs (i + 1) (acc + list-length ((list-at cs i).cv-messages))
+
+  the-log : ChatState -> Text
+  the-log (st) =
+    let (s, r) = chat-route st (boot-host 0) (chat-get "/api/chat/messages?t=tok-0&conv=c1")
+    in r.body
+
+  opening : [Console, Device.Block] Nothing
+  opening = act
+    before <- chat-store-load
+    print-line-uni ("loaded " & show (list-length (before.cs-accounts)) & " accounts, " & show (message-total before) & " messages")
+    saved <- chat-store-save (boot-step before)
+    print-line-uni ("saved " & show saved)
+    after <- chat-store-load
+    print-line-uni ("on disk: " & show (list-length (after.cs-accounts)) & " accounts, " & show (message-total after) & " messages")
+    print-line-uni (the-log after)
+  end
