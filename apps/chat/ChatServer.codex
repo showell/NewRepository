@@ -310,15 +310,15 @@ Section: Conversations
     if i >= list-length (u.ca-convs) then acc
     else when chat-conv-of (st.cs-convs) (list-at (u.ca-convs) i)
       is None -> chat-conv-rows st u (i + 1) acc
-      is Just (c) -> chat-conv-rows st u (i + 1) (acc & chat-conv-pairs u c i)
+      is Just (c) -> chat-conv-rows st u (i + 1) (chat-conv-pairs acc u c i)
 
-  chat-conv-pairs : ChatAccount, ChatConv, Integer -> List JsonPair
-  chat-conv-pairs (u) (c) (i) =
+  chat-conv-pairs : List JsonPair, ChatAccount, ChatConv, Integer -> List JsonPair
+  chat-conv-pairs (acc) (u) (c) (i) =
     let n = show i
-    in [json-pair ("name-" & n) (json-str (chat-conv-title u c)),
-        json-pair ("preview-" & n) (json-str (chat-preview c)),
-        json-pair ("time-" & n) (json-str (chat-last-time c)),
-        json-pair ("id-" & n) (json-str (c.cv-id))]
+    in let a1 = list-push acc (json-pair ("name-" & n) (json-str (chat-conv-title u c)))
+    in let a2 = list-push a1 (json-pair ("preview-" & n) (json-str (chat-preview c)))
+    in let a3 = list-push a2 (json-pair ("time-" & n) (json-str (chat-last-time c)))
+    in list-push a3 (json-pair ("id-" & n) (json-str (c.cv-id)))
 
   chat-conv-title : ChatAccount, ChatConv -> Text
   chat-conv-title (u) (c) =
@@ -417,11 +417,10 @@ Section: Messages
     if i >= list-length ms then acc
     else let m = list-at ms i
     in let n = show i
-    in chat-message-rows u ms (i + 1) (acc & [
-      json-pair ("body-" & n) (json-str (m.cm-body)),
-      json-pair ("sender-" & n) (json-str (m.cm-sender)),
-      json-pair ("time-" & n) (json-str (m.cm-time)),
-      json-pair ("mine-" & n) (json-str (if m.cm-sender == u.ca-name then "1" else "0"))])
+    in let a1 = list-push acc (json-pair ("body-" & n) (json-str (m.cm-body)))
+    in let a2 = list-push a1 (json-pair ("sender-" & n) (json-str (m.cm-sender)))
+    in let a3 = list-push a2 (json-pair ("time-" & n) (json-str (m.cm-time)))
+    in chat-message-rows u ms (i + 1) (list-push a3 (json-pair ("mine-" & n) (json-str (if m.cm-sender == u.ca-name then "1" else "0"))))
 
  Sending appends to the conversation named by `to`, stamped with the host's
  time and numbered from the state's counter. As in server.ps1, any account
