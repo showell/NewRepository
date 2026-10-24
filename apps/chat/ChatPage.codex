@@ -13,6 +13,7 @@ Section: State Keys
   sk-active-conv : Text = "active-conv"
   sk-conv-count : Text = "conv-count"
   sk-msg-count : Text = "msg-count"
+  sk-msgs-shown : Text = "msgs-shown"
   sk-compose : Text = "compose-text"
   sk-ws-status : Text = "ws-status"
   sk-contact-count : Text = "contact-count"
@@ -189,10 +190,15 @@ Section: Chat Area
     ]
     in build-msg-items (i + 1) count (list-push acc row)
 
+ The compose box is an input widget holding what is being typed
+ (on-compose-input keeps it in sk-compose), so a render that rebuilds the
+ page draws it with the text it had.
+
   compose-bar : Integer -> WidgetNode
   compose-bar (x) =
-    widget-box "compose" "compose" [
-      widget-add-child (widget-custom "msg-input" "input" 0 0) (widget-label "msg-placeholder" "Message"),
+    let typed = state-get-text sk-compose
+    in widget-box "compose" "compose" [
+      widget-add-child (widget-input "msg-input" typed (text-length typed)) (widget-label "msg-placeholder" "Message"),
       widget-button "send-btn" "&#x27A4;"
     ]
 
@@ -356,10 +362,19 @@ Section: Data Loading
     in let conv-id = state-get-text ("conv-id-" & show active)
     in fetch-get-then ("/api/chat/messages?t=" & tok & "&conv=" & conv-id) msgs-cb
 
+ A render rebuilds the page, the compose bar with it, so a render while
+ someone types takes the input away from them. The poll asks for the open
+ conversation's messages every three seconds; messages are only ever added,
+ so the same conversation with the same count is the same thread, and it is
+ not drawn again. Another conversation, or a new message, is.
+
   msgs-cb : Text -> Integer
   msgs-cb (resp) =
     let obj = json-parse-obj resp
     in let count-str = json-obj-field obj "count"
+    in let shown = state-get-text ("conv-id-" & show (state-get sk-active-conv)) & "#" & count-str
+    in if shown == state-get-text sk-msgs-shown then 0
+    else let k = state-set-text sk-msgs-shown shown
     in let count = text-to-int count-str
     in let s = state-set sk-msg-count count
     in load-msg-details 0 count resp
