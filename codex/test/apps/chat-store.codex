@@ -5,33 +5,73 @@ Chapter: ChatStoreSession
   cites Foreword chapter Console
   cites Foreword chapter Fat16
 
- One boot of a chat server that keeps its state on disk. It loads what the
- disk holds and says how much; registers the next user, user-<n>, the
- first boot also making the group `log`; posts `boot <n>` to it; saves; and
- reads the state back off the disk to list the log as user-0 sees it.
+ One boot of a chat server that keeps its state on disk, saving after every
+ request that changes it, as a host does. The first boot claims alice and
+ bob, starts their direct conversation and a group, `log`; every boot then
+ has alice and bob send one message each to the direct conversation. It
+ reads the state back off the disk and shows it as each of them sees it,
+ with the files it is kept in.
 
- On a fresh volume that is one account and one message. Booted again on the
- same disk, each boot finds the ones before it: the second loads one
- account and one message and lists two.
+ On a fresh volume that is two accounts, two conversations and two
+ messages. Booted again on the same disk, a boot finds the ones before it,
+ adds two messages to the same file, and the state read back is the state
+ that was in hand.
 
  We say:
 
-Section: One Boot
+Section: Requests
 
   chat-get : Text -> HttpRequest
   chat-get (path) = HttpRequest { method = "GET", path = path, body = "", valid = True }
 
-  boot-host : Integer -> ChatHost
-  boot-host (n) = ChatHost { ch-time = "10:0" & show n, ch-token = "tok-" & show n }
+  boot-host : Text -> ChatHost
+  boot-host (tok) = ChatHost { ch-time = "10:00", ch-token = tok }
 
-  boot-step : ChatState -> ChatState
-  boot-step (st) =
-    let n = list-length (st.cs-accounts)
-    in let host = boot-host n
-    in let (s1, r1) = chat-route st host (chat-get ("/api/chat/register?name=user-" & show n))
-    in let (s2, r2) = if n == 0 then chat-route s1 host (chat-get "/api/chat/group?t=tok-0&name=log") else (s1, r1)
-    in let (s3, r3) = chat-route s2 host (chat-get ("/api/chat/send?t=tok-" & show n & "&to=c1&body=boot+" & show n))
-    in s3
+ One request, saved as a host saves it: a mark before the route, and the
+ state after it.
+
+  StepResult = record {
+    sr-state : ChatState,
+    sr-saved : Boolean
+  }
+
+  step : ChatState, Text, Text -> [Device.Block] StepResult
+  step (st) (tok) (path) =
+    let mark = chat-store-mark st
+    in let (st2, resp) = chat-route st (boot-host tok) (chat-get path)
+    in act
+      ok <- chat-store-save mark st2
+      StepResult { sr-state = st2, sr-saved = ok }
+    end
+
+  first-boot : ChatState -> [Device.Block] StepResult
+  first-boot (st) = act
+    a <- step st "tok-alice" "/api/chat/register?name=alice"
+    b <- step (a.sr-state) "tok-bob" "/api/chat/register?name=bob"
+    c <- step (b.sr-state) "" "/api/chat/start?t=tok-alice&with=bob"
+    d <- step (c.sr-state) "" "/api/chat/group?t=tok-bob&name=log&members=alice"
+    StepResult { sr-state = d.sr-state, sr-saved = a.sr-saved & b.sr-saved & c.sr-saved & d.sr-saved }
+  end
+
+  every-boot : ChatState, Integer -> [Device.Block] StepResult
+  every-boot (st) (boot) = act
+    a <- step st "" ("/api/chat/send?t=tok-alice&to=c1&body=alice+boot+" & show boot)
+    b <- step (a.sr-state) "" ("/api/chat/send?t=tok-bob&to=c1&body=bob+boot+" & show boot)
+    StepResult { sr-state = b.sr-state, sr-saved = a.sr-saved & b.sr-saved }
+  end
+
+Section: What Each Sees
+
+  view : ChatState, Text -> Text
+  view (st) (q) =
+    let (s, r) = chat-route st (boot-host "") (chat-get q)
+    in r.body
+
+  views : ChatState -> Text
+  views (st) =
+    view st "/api/chat/conversations?t=tok-alice" & "\n"
+    & view st "/api/chat/conversations?t=tok-bob" & "\n"
+    & view st "/api/chat/messages?t=tok-bob&conv=c1"
 
   message-total : ChatState -> Integer
   message-total (st) = message-total-loop (st.cs-convs) 0 0
@@ -41,18 +81,35 @@ Section: One Boot
     if i >= list-length cs then acc
     else message-total-loop cs (i + 1) (acc + list-length ((list-at cs i).cv-messages))
 
-  the-log : ChatState -> Text
-  the-log (st) =
-    let (s, r) = chat-route st (boot-host 0) (chat-get "/api/chat/messages?t=tok-0&conv=c1")
-    in r.body
+  counts : ChatState -> Text
+  counts (st) =
+    show (list-length (st.cs-accounts)) & " accounts, " & show (list-length (st.cs-convs)) & " conversations, "
+    & show (message-total st) & " messages, next conversation " & show (st.cs-next-conv) & ", next message " & show (st.cs-next-msg)
+
+  joined : List Text, Integer, Text -> Text
+  joined (xs) (i) (acc) =
+    if i >= list-length xs then acc
+    else joined xs (i + 1) (if i == 0 then list-at xs i else acc & " " & list-at xs i)
+
+Section: Entry
 
   opening : [Console, Device.Block] Nothing
   opening = act
-    before <- chat-store-load
-    print-line-uni ("loaded " & show (list-length (before.cs-accounts)) & " accounts, " & show (message-total before) & " messages")
-    saved <- chat-store-save (boot-step before)
-    print-line-uni ("saved " & show saved)
-    after <- chat-store-load
-    print-line-uni ("on disk: " & show (list-length (after.cs-accounts)) & " accounts, " & show (message-total after) & " messages")
-    print-line-uni (the-log after)
+    loaded <- chat-store-load
+    let before = loaded.sl-state
+    in let boot = message-total before / 2
+    in act
+      print-line-uni ("loaded " & counts before & (if text-length (loaded.sl-problem) > 0 then "; problem: " & loaded.sl-problem else ""))
+      made <- if list-length (before.cs-accounts) == 0 then first-boot before else StepResult { sr-state = before, sr-saved = True }
+      sent <- every-boot (made.sr-state) boot
+      print-line-uni ("saved " & show (made.sr-saved & sent.sr-saved))
+      again <- chat-store-load
+      print-line-uni ("on disk: " & counts (again.sl-state))
+      print-line-uni ("read back is the state in hand: " & show (views (again.sl-state) == views (sent.sr-state)))
+      print-line-uni (views (again.sl-state))
+      users <- list-files "codex-chat/users" ""
+      convs <- list-directories "codex-chat/convs"
+      files <- list-files "codex-chat/convs/c1" ""
+      print-line-uni ("users: " & joined users 0 "" & "; convs: " & joined convs 0 "" & "; c1: " & joined files 0 "")
+    end
   end

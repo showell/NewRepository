@@ -2,162 +2,360 @@ Chapter: ChatStore
   cites Chat chapter ChatServer
   cites Encode chapter Json
   cites Foreword chapter Fat16
+  cites Foreword chapter Parse
   cites Foreword chapter Maybe
 
- Codex Chat's state on disk: the whole of it, accounts, conversations and
- messages and the two counters, as one JSON file on the boot volume's FAT16,
- written after a change and read when the server starts. apps/chat/web/
- server.ps1 kept the same state the same way, in data/chat-state.json; this
- is that file on a disk the chapter drives itself.
+ Codex Chat's state on disk, a file for each thing that is written by itself,
+ under one directory of the boot volume's FAT16, `codex-chat`, which nothing
+ else writes:
 
- The file is read back with the Json foreword's own parser, which is total:
- a missing file, or one that does not parse, starts the server with an
- empty state rather than stopping it, and says nothing a request could not
- already see.
+   codex-chat/users/<n>.json            an account: its name and token
+   codex-chat/convs/<id>/conv.json      a conversation: kind, name, members
+   codex-chat/convs/<id>/messages.jsonl its messages, one JSON object a line
+
+ A claim writes one user file, once. Starting a conversation writes its
+ conversation file, once. A message is appended to its conversation's
+ messages, so a send costs one message, not the conversation and not the
+ chat. Nothing is ever rewritten.
+
+ What is not written is derived when the state is read. An account's
+ conversations are the conversations it is a member of, in the order they
+ were started, which is the order ChatServer joins them in. The counters
+ are one past the largest conversation and message numbers found. An
+ account's contacts are not kept: no route adds one, so they are always
+ empty, as in server.ps1.
+
+ A user file's number is its account's place in the state, so a missing
+ number would put the next claim on top of someone else's file. Reading
+ refuses such a disk, and a file that does not parse, rather than start a
+ server that would lose an account; the host says why and stops. A disk
+ with no `codex-chat` directory is a new chat.
 
  Text is written a code point to a byte (fat16-write-file), so a state is
  kept whole while its names and messages stay within Latin-1.
 
  We say:
 
-Section: The File
+Section: The Files
 
-  chat-store-path : Text = "CHAT.JSN"
+  chat-store-root : Text = "codex-chat"
 
-  chat-store-version : Integer = 1
+  chat-store-users : Text = "codex-chat/users"
+
+  chat-store-convs : Text = "codex-chat/convs"
+
+  chat-store-user-path : Integer -> Text
+  chat-store-user-path (n) = chat-store-users & "/" & show n & ".json"
+
+  chat-store-conv-dir : Text -> Text
+  chat-store-conv-dir (cid) = chat-store-convs & "/" & cid
+
+  chat-store-conv-path : Text -> Text
+  chat-store-conv-path (cid) = chat-store-conv-dir cid & "/conv.json"
+
+  chat-store-messages-path : Text -> Text
+  chat-store-messages-path (cid) = chat-store-conv-dir cid & "/messages.jsonl"
 
 Section: Saving
 
-  chat-store-save : ChatState -> [Device.Block] Boolean
-  chat-store-save (st) = fat16-write-file chat-store-path (json-emit (chat-state-json st))
+ What a request changed is found against a mark taken before it: how many
+ accounts there were, and how many messages each conversation held. It
+ cannot be found against the state before, because list-push writes in
+ place while a list has room, so the state before a route shares its lists
+ with the state after and reads as the state after (docs/
+ ArchitectsSketchbook.md, "Copy first"). The mark is counts, fresh integers
+ no route can reach.
 
-  chat-state-json : ChatState -> JsonValue
-  chat-state-json (st) = json-object [
-    json-pair "version" (json-int chat-store-version),
-    json-pair "next-conv" (json-int (st.cs-next-conv)),
-    json-pair "next-msg" (json-int (st.cs-next-msg)),
-    json-pair "accounts" (json-array (chat-accounts-json (st.cs-accounts) 0 [])),
-    json-pair "convs" (json-array (chat-convs-json (st.cs-convs) 0 []))
-  ]
+ The accounts past the mark are new; so are the conversations, and a
+ conversation holding more messages than it did has new ones at its end,
+ because messages are only ever added.
 
-  chat-texts-json : List Text, Integer, List JsonValue -> List JsonValue
-  chat-texts-json (xs) (i) (acc) =
-    if i >= list-length xs then acc
-    else chat-texts-json xs (i + 1) (list-push acc (json-str (list-at xs i)))
+ A save that fails has written part of the change at most. The state in
+ hand holds all of it, and the state before is gone for the same reason a
+ mark is needed, so a host that sees False reads the state back from the
+ disk, which holds what was committed.
 
-  chat-accounts-json : List ChatAccount, Integer, List JsonValue -> List JsonValue
-  chat-accounts-json (accts) (i) (acc) =
-    if i >= list-length accts then acc
-    else let a = list-at accts i
-    in chat-accounts-json accts (i + 1) (list-push acc (json-object [
-      json-pair "name" (json-str (a.ca-name)),
-      json-pair "token" (json-str (a.ca-token)),
-      json-pair "contacts" (json-array (chat-texts-json (a.ca-contacts) 0 [])),
-      json-pair "convs" (json-array (chat-texts-json (a.ca-convs) 0 []))
-    ]))
+  ChatStoreMark = record {
+    mk-accounts : Integer,
+    mk-messages : List Integer
+  }
 
-  chat-convs-json : List ChatConv, Integer, List JsonValue -> List JsonValue
-  chat-convs-json (convs) (i) (acc) =
+  chat-store-mark : ChatState -> ChatStoreMark
+  chat-store-mark (st) = ChatStoreMark {
+    mk-accounts = list-length (st.cs-accounts),
+    mk-messages = chat-store-message-counts (st.cs-convs) 0 []
+  }
+
+  chat-store-message-counts : List ChatConv, Integer, List Integer -> List Integer
+  chat-store-message-counts (convs) (i) (acc) =
     if i >= list-length convs then acc
-    else let c = list-at convs i
-    in chat-convs-json convs (i + 1) (list-push acc (json-object [
-      json-pair "id" (json-str (c.cv-id)),
-      json-pair "kind" (json-str (c.cv-kind)),
-      json-pair "name" (json-str (c.cv-name)),
-      json-pair "members" (json-array (chat-texts-json (c.cv-members) 0 [])),
-      json-pair "messages" (json-array (chat-messages-json (c.cv-messages) 0 []))
-    ]))
+    else chat-store-message-counts convs (i + 1) (list-push acc (list-length ((list-at convs i).cv-messages)))
 
-  chat-messages-json : List ChatMessage, Integer, List JsonValue -> List JsonValue
-  chat-messages-json (ms) (i) (acc) =
+  chat-store-save : ChatStoreMark, ChatState -> [Device.Block] Boolean
+  chat-store-save (mark) (after) = act
+    users <- chat-store-save-users (after.cs-accounts) (mark.mk-accounts)
+    convs <- chat-store-save-convs (mark.mk-messages) (after.cs-convs) 0
+    if users then convs else False
+  end
+
+  chat-store-save-users : List ChatAccount, Integer -> [Device.Block] Boolean
+  chat-store-save-users (accts) (i) =
+    if i >= list-length accts then True
+    else let a = list-at accts i
+    in act
+      ok <- fat16-write-file (chat-store-user-path i) (json-emit (json-object [
+        json-pair "name" (json-str (a.ca-name)),
+        json-pair "token" (json-str (a.ca-token))
+      ]))
+      if ok then chat-store-save-users accts (i + 1) else False
+    end
+
+  chat-store-save-convs : List Integer, List ChatConv, Integer -> [Device.Block] Boolean
+  chat-store-save-convs (counts) (convs) (i) =
+    if i >= list-length convs then True
+    else let c = list-at convs i
+    in let had = if i < list-length counts then list-at counts i else 0 - 1
+    in act
+      ok <- chat-store-save-conv c had
+      if ok then chat-store-save-convs counts convs (i + 1) else False
+    end
+
+ `had` is how many messages the conversation held before, or -1 when it is
+ new and its directory and conversation file are made first.
+
+  chat-store-save-conv : ChatConv, Integer -> [Device.Block] Boolean
+  chat-store-save-conv (c) (had) =
+    if had >= 0 then chat-store-append-messages c had
+    else act
+      vol <- fat16-boot-volume
+      made <- fat16-create-directory vol (chat-store-conv-dir (c.cv-id))
+      ok <- fat16-write-file (chat-store-conv-path (c.cv-id)) (json-emit (json-object [
+        json-pair "id" (json-str (c.cv-id)),
+        json-pair "kind" (json-str (c.cv-kind)),
+        json-pair "name" (json-str (c.cv-name)),
+        json-pair "members" (json-array (chat-store-texts-json (c.cv-members) 0 []))
+      ]))
+      if ok then chat-store-append-messages c 0 else False
+    end
+
+  chat-store-append-messages : ChatConv, Integer -> [Device.Block] Boolean
+  chat-store-append-messages (c) (from) =
+    if from >= list-length (c.cv-messages) then True
+    else fat16-append-file (chat-store-messages-path (c.cv-id)) (chat-store-lines (c.cv-messages) from "")
+
+  chat-store-lines : List ChatMessage, Integer, Text -> Text
+  chat-store-lines (ms) (i) (acc) =
     if i >= list-length ms then acc
     else let m = list-at ms i
-    in chat-messages-json ms (i + 1) (list-push acc (json-object [
+    in chat-store-lines ms (i + 1) (acc & json-emit (json-object [
       json-pair "id" (json-int (m.cm-id)),
       json-pair "sender" (json-str (m.cm-sender)),
       json-pair "body" (json-str (m.cm-body)),
       json-pair "time" (json-str (m.cm-time))
-    ]))
+    ]) & "\n")
+
+  chat-store-texts-json : List Text, Integer, List JsonValue -> List JsonValue
+  chat-store-texts-json (xs) (i) (acc) =
+    if i >= list-length xs then acc
+    else chat-store-texts-json xs (i + 1) (list-push acc (json-str (list-at xs i)))
 
 Section: Loading
 
-  chat-store-load : [Device.Block] ChatState
-  chat-store-load = act
-    vol <- fat16-boot-volume
-    if fat16-vol-is-usable vol == False then chat-state-new
-    else when fat16-read-text vol chat-store-path
-      is Just (t) -> chat-state-of-text t
-      is None -> chat-state-new
-  end
+ The state as the disk holds it, or why the disk cannot be trusted with the
+ next write: `sl-problem` is empty when it can.
 
-  chat-state-of-text : Text -> ChatState
-  chat-state-of-text (t) =
-    when json-parse t
-      is Just (v) -> chat-state-of-json v
-      is None -> chat-state-new
-
-  chat-state-of-json : JsonValue -> ChatState
-  chat-state-of-json (v) = ChatState {
-    cs-accounts = chat-accounts-of (chat-field v "accounts") 0 [],
-    cs-convs = chat-convs-of (chat-field v "convs") 0 [],
-    cs-next-conv = json-get-int v "next-conv" 1,
-    cs-next-msg = json-get-int v "next-msg" 1
+  ChatStoreLoad = record {
+    sl-state : ChatState,
+    sl-problem : Text
   }
 
- A field that is not there reads as an empty array, so a part missing from
- the file is an empty part of the state.
+  chat-store-load : [Device.Block] ChatStoreLoad
+  chat-store-load = act
+    vol <- fat16-boot-volume
+    if fat16-vol-is-usable vol == False then ChatStoreLoad { sl-state = chat-state-new, sl-problem = "no usable FAT16 volume" }
+    else act
+      root <- chat-store-ensure-dir vol chat-store-root
+      users <- chat-store-ensure-dir vol chat-store-users
+      convs <- chat-store-ensure-dir vol chat-store-convs
+      if root & users & convs then chat-store-read vol
+      else ChatStoreLoad { sl-state = chat-state-new, sl-problem = "cannot make the codex-chat directories" }
+    end
+  end
 
-  chat-field : JsonValue, Text -> JsonValue
-  chat-field (v) (key) =
-    when json-get v key
-      is Just (x) -> x
-      is None -> json-array []
+  chat-store-ensure-dir : Fat16Volume, Text -> [Device.Block] Boolean
+  chat-store-ensure-dir (vol) (path) = act
+    found <- fat16-resolve-path vol path
+    when found
+      is Just (e) -> fat16-is-dir-entry e
+      is None -> fat16-create-directory vol path
+  end
 
-  chat-texts-of : JsonValue, Integer, List Text -> List Text
-  chat-texts-of (arr) (i) (acc) =
-    if i >= json-array-length arr then acc
-    else when json-array-at arr i
-      is Just (x) -> chat-texts-of arr (i + 1) (list-push acc (chat-text-of x))
-      is None -> chat-texts-of arr (i + 1) acc
+  chat-store-read : Fat16Volume -> [Device.Block] ChatStoreLoad
+  chat-store-read (vol) = act
+    user-files <- list-files chat-store-users ".json"
+    accts <- chat-store-read-users vol (list-length user-files) 0 []
+    conv-dirs <- list-directories chat-store-convs
+    convs <- chat-store-read-convs vol conv-dirs 1 (chat-store-max-conv conv-dirs 0 0) []
+    if text-length (accts.ur-problem) > 0 then ChatStoreLoad { sl-state = chat-state-new, sl-problem = accts.ur-problem }
+    else if text-length (convs.cr-problem) > 0 then ChatStoreLoad { sl-state = chat-state-new, sl-problem = convs.cr-problem }
+    else ChatStoreLoad {
+      sl-state = ChatState {
+        cs-accounts = chat-store-join-convs (accts.ur-accounts) (convs.cr-convs) 0,
+        cs-convs = convs.cr-convs,
+        cs-next-conv = chat-store-max-conv conv-dirs 0 0 + 1,
+        cs-next-msg = chat-store-max-msg (convs.cr-convs) 0 0 + 1
+      },
+      sl-problem = ""
+    }
+  end
 
-  chat-text-of : JsonValue -> Text
-  chat-text-of (x) = when x
-    is JsonStr (s) -> s
-    is otherwise -> ""
+Section: Reading Accounts
 
-  chat-accounts-of : JsonValue, Integer, List ChatAccount -> List ChatAccount
-  chat-accounts-of (arr) (i) (acc) =
-    if i >= json-array-length arr then acc
-    else when json-array-at arr i
-      is Just (a) -> chat-accounts-of arr (i + 1) (list-push acc (ChatAccount {
-        ca-name = json-get-str a "name" "",
-        ca-token = json-get-str a "token" "",
-        ca-contacts = chat-texts-of (chat-field a "contacts") 0 [],
-        ca-convs = chat-texts-of (chat-field a "convs") 0 []
-      }))
-      is None -> chat-accounts-of arr (i + 1) acc
+  UsersRead = record {
+    ur-accounts : List ChatAccount,
+    ur-problem : Text
+  }
 
-  chat-convs-of : JsonValue, Integer, List ChatConv -> List ChatConv
-  chat-convs-of (arr) (i) (acc) =
-    if i >= json-array-length arr then acc
-    else when json-array-at arr i
-      is Just (c) -> chat-convs-of arr (i + 1) (list-push acc (ChatConv {
-        cv-id = json-get-str c "id" "",
-        cv-kind = json-get-str c "kind" "",
-        cv-members = chat-texts-of (chat-field c "members") 0 [],
-        cv-messages = chat-messages-of (chat-field c "messages") 0 [],
-        cv-name = json-get-str c "name" ""
-      }))
-      is None -> chat-convs-of arr (i + 1) acc
+ Accounts 0 to count-1, each from its own file: a number missing below the
+ count, or a file that does not parse, is a problem.
 
-  chat-messages-of : JsonValue, Integer, List ChatMessage -> List ChatMessage
-  chat-messages-of (arr) (i) (acc) =
-    if i >= json-array-length arr then acc
-    else when json-array-at arr i
-      is Just (m) -> chat-messages-of arr (i + 1) (list-push acc (ChatMessage {
+  chat-store-read-users : Fat16Volume, Integer, Integer, List ChatAccount -> [Device.Block] UsersRead
+  chat-store-read-users (vol) (count) (i) (acc) =
+    if i >= count then UsersRead { ur-accounts = acc, ur-problem = "" }
+    else act
+      text <- fat16-read-text vol (chat-store-user-path i)
+      when chat-store-parse text
+        is None -> UsersRead { ur-accounts = acc, ur-problem = chat-store-user-path i & " is missing or does not parse" }
+        is Just (v) -> chat-store-read-users vol count (i + 1) (list-push acc (ChatAccount {
+          ca-name = json-get-str v "name" "",
+          ca-token = json-get-str v "token" "",
+          ca-contacts = [],
+          ca-convs = []
+        }))
+    end
+
+  chat-store-parse : Maybe Text -> Maybe JsonValue
+  chat-store-parse (m) = when m
+    is Just (t) -> json-parse t
+    is None -> None
+
+ Every member joins each conversation in the order the conversations were
+ started, as chat-join-all joined them when they were.
+
+  chat-store-join-convs : List ChatAccount, List ChatConv, Integer -> List ChatAccount
+  chat-store-join-convs (accts) (convs) (i) =
+    if i >= list-length convs then accts
+    else let c = list-at convs i
+    in chat-store-join-convs (chat-join-all accts (c.cv-members) (c.cv-id) 0) convs (i + 1)
+
+Section: Reading Conversations
+
+  ConvsRead = record {
+    cr-convs : List ChatConv,
+    cr-problem : Text
+  }
+
+ A conversation directory is `c` and its number. They are read from 1 up
+ to the largest, in the order they were started; a number with no
+ directory is skipped, since a conversation is found by the id it holds.
+
+  chat-store-conv-number : Text -> Integer
+  chat-store-conv-number (name) =
+    if text-length name < 2 then 0
+    else if text-take name 1 /= "c" then 0
+    else text-to-int (text-drop name 1)
+
+  chat-store-max-conv : List Text, Integer, Integer -> Integer
+  chat-store-max-conv (names) (i) (best) =
+    if i >= list-length names then best
+    else let n = chat-store-conv-number (list-at names i)
+    in chat-store-max-conv names (i + 1) (if n > best then n else best)
+
+  chat-store-has-text : List Text, Text, Integer -> Boolean
+  chat-store-has-text (xs) (x) (i) =
+    if i >= list-length xs then False
+    else if list-at xs i == x then True
+    else chat-store-has-text xs x (i + 1)
+
+  chat-store-read-convs : Fat16Volume, List Text, Integer, Integer, List ChatConv -> [Device.Block] ConvsRead
+  chat-store-read-convs (vol) (names) (n) (last) (acc) =
+    if n > last then ConvsRead { cr-convs = acc, cr-problem = "" }
+    else let cid = "c" & show n
+    in if chat-store-has-text names cid 0 == False then chat-store-read-convs vol names (n + 1) last acc
+    else act
+      head <- fat16-read-text vol (chat-store-conv-path cid)
+      body <- fat16-read-text vol (chat-store-messages-path cid)
+      when chat-store-parse head
+        is None -> ConvsRead { cr-convs = acc, cr-problem = chat-store-conv-path cid & " is missing or does not parse" }
+        is Just (v) -> chat-store-read-conv-messages vol names n last acc v (chat-store-text-lines body)
+    end
+
+  chat-store-read-conv-messages : Fat16Volume, List Text, Integer, Integer, List ChatConv, JsonValue, List Text -> [Device.Block] ConvsRead
+  chat-store-read-conv-messages (vol) (names) (n) (last) (acc) (v) (lines) =
+    let ms = chat-store-messages-of-lines lines 0 []
+    in if list-length ms < chat-store-nonblank lines 0 0 then
+      ConvsRead { cr-convs = acc, cr-problem = chat-store-messages-path ("c" & show n) & " has a line that does not parse" }
+    else chat-store-read-convs vol names (n + 1) last (list-push acc (ChatConv {
+      cv-id = json-get-str v "id" "",
+      cv-kind = json-get-str v "kind" "",
+      cv-members = chat-store-texts-of (chat-store-field v "members") 0 [],
+      cv-messages = ms,
+      cv-name = json-get-str v "name" ""
+    }))
+
+ A conversation nobody has written to has no messages file.
+
+  chat-store-text-lines : Maybe Text -> List Text
+  chat-store-text-lines (m) = when m
+    is Just (t) -> text-split t "\n"
+    is None -> []
+
+  chat-store-nonblank : List Text, Integer, Integer -> Integer
+  chat-store-nonblank (lines) (i) (n) =
+    if i >= list-length lines then n
+    else chat-store-nonblank lines (i + 1) (if text-length (list-at lines i) > 0 then n + 1 else n)
+
+  chat-store-messages-of-lines : List Text, Integer, List ChatMessage -> List ChatMessage
+  chat-store-messages-of-lines (lines) (i) (acc) =
+    if i >= list-length lines then acc
+    else let line = list-at lines i
+    in if text-length line == 0 then chat-store-messages-of-lines lines (i + 1) acc
+    else when json-parse line
+      is None -> chat-store-messages-of-lines lines (i + 1) acc
+      is Just (m) -> chat-store-messages-of-lines lines (i + 1) (list-push acc (ChatMessage {
         cm-id = json-get-int m "id" 0,
         cm-sender = json-get-str m "sender" "",
         cm-body = json-get-str m "body" "",
         cm-time = json-get-str m "time" ""
       }))
-      is None -> chat-messages-of arr (i + 1) acc
+
+  chat-store-max-msg : List ChatConv, Integer, Integer -> Integer
+  chat-store-max-msg (convs) (i) (best) =
+    if i >= list-length convs then best
+    else chat-store-max-msg convs (i + 1) (chat-store-max-in ((list-at convs i).cv-messages) 0 best)
+
+  chat-store-max-in : List ChatMessage, Integer, Integer -> Integer
+  chat-store-max-in (ms) (i) (best) =
+    if i >= list-length ms then best
+    else let id = (list-at ms i).cm-id
+    in chat-store-max-in ms (i + 1) (if id > best then id else best)
+
+ A field that is not there reads as an empty array.
+
+  chat-store-field : JsonValue, Text -> JsonValue
+  chat-store-field (v) (key) =
+    when json-get v key
+      is Just (x) -> x
+      is None -> json-array []
+
+  chat-store-texts-of : JsonValue, Integer, List Text -> List Text
+  chat-store-texts-of (arr) (i) (acc) =
+    if i >= json-array-length arr then acc
+    else when json-array-at arr i
+      is Just (x) -> chat-store-texts-of arr (i + 1) (list-push acc (chat-store-text-of x))
+      is None -> chat-store-texts-of arr (i + 1) acc
+
+  chat-store-text-of : JsonValue -> Text
+  chat-store-text-of (x) = when x
+    is JsonStr (s) -> s
+    is otherwise -> ""

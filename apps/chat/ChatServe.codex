@@ -100,17 +100,26 @@ Section: Answering
   chat-changes (p) =
     p == "/api/chat/register" | p == "/api/chat/send" | p == "/api/chat/start" | p == "/api/chat/group"
 
+ A change is saved against a mark taken before the route (ChatStore says
+ why). When the disk refuses it, the state in hand holds a change the disk
+ does not, and the state before it is gone with it, so the state is read
+ back from the disk: what was committed, and nothing else.
+
   chat-answer : ChatState, HttpRequest -> [Device.Block] ChatAnswer
   chat-answer (st) (req) =
     let p = chat-path-only (req.path)
     in let tok = chat-fresh-token 0
     in if p == "/api/chat/register" & text-length tok == 0 then
       ChatAnswer { an-state = st, an-resp = chat-error "no random number generator to make a token" }
-    else let (st2, resp) = chat-route st (ChatHost { ch-time = chat-clock 0, ch-token = tok }) req
+    else let mark = chat-store-mark st
+    in let (st2, resp) = chat-route st (ChatHost { ch-time = chat-clock 0, ch-token = tok }) req
     in if chat-changes p then act
-      saved <- chat-store-save st2
+      saved <- chat-store-save mark st2
       if saved then ChatAnswer { an-state = st2, an-resp = resp }
-      else ChatAnswer { an-state = st, an-resp = chat-error "the disk refused the write" }
+      else act
+        back <- chat-store-load
+        ChatAnswer { an-state = back.sl-state, an-resp = chat-error "the disk refused the write" }
+      end
     end
     else ChatAnswer { an-state = st2, an-resp = resp }
 
@@ -340,9 +349,11 @@ Section: The Chat Mux
 
  WebServer's compaction copies the mux into an arena and gives back
  everything above the loop's mark, the chat's state included. The disk is
- the state's copy: every change is saved before it is answered, and a
- failed save keeps the state the disk has, so the state read back is the
- state that was in hand. The stream list is copied beside the mux.
+ the state's copy: every change is saved before it is answered, and after
+ a failed save the state is the one read back from the disk, so the state
+ read back here is the state that was in hand. The stream list is copied beside the mux. The
+ disk passed its reading when the server started, and only this server
+ has written it since.
 
   chat-mux-compact : ChatMux, Integer, Integer -> [Device.Block] ChatMux
   chat-mux-compact (cm) (set) (mark) =
@@ -359,8 +370,8 @@ Section: The Chat Mux
     in let back = __heap-restore mark
     in let committed = nc-set-commit set target
     in act
-      st <- chat-store-load
-      ChatMux { cm-mux = copy, cm-state = st, cm-streams = keys, cm-page = cm.cm-page, cm-changed = False }
+      loaded <- chat-store-load
+      ChatMux { cm-mux = copy, cm-state = loaded.sl-state, cm-streams = keys, cm-page = cm.cm-page, cm-changed = False }
     end
 
  WebServer's loop, which serves forever: its give-up after fifty million
@@ -397,11 +408,20 @@ Section: Entry
 
   chat-port : Integer = 9200
 
+ A disk the store will not trust with the next write is not served: the
+ server says why and stops, and the disk is left as it was found.
+
   opening : [Console, Network.Read, Network.Write, Device.Block] Nothing
   opening = act
-    st <- chat-store-load
+    loaded <- chat-store-load
+    if text-length (loaded.sl-problem) > 0 then print-line-uni ("codex-chat: not serving: " & loaded.sl-problem)
+    else chat-serve-from (loaded.sl-state)
+  end
+
+  chat-serve-from : ChatState -> [Console, Network.Read, Network.Write, Device.Block] Nothing
+  chat-serve-from (st) = act
     page <- chat-page-bytes
-    print-line-uni ("codex-chat: " & show (list-length (st.cs-accounts)) & " names claimed; page " & show (list-length page) & " bytes; listening on guest port " & show chat-port)
+    print-line-uni ("codex-chat: " & show (list-length (st.cs-accounts)) & " names claimed, " & show (list-length (st.cs-convs)) & " conversations; page " & show (list-length page) & " bytes; listening on guest port " & show chat-port)
     let m0 = WebMux { listen = net-io-listen (fresh-listen-transport chat-port), conns = [], served = 0 }
     in act
       served <- chat-mux-run (ChatMux { cm-mux = m0, cm-state = st, cm-streams = [], cm-page = page, cm-changed = False }) chat-port 0 0 [] 0 0
