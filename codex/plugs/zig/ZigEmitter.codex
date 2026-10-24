@@ -1792,7 +1792,7 @@ Section: Type Definition Emission
      is AVariantTypeDef (name) (tparams) (ctors) (s) ->
       emit-zig-sum-type (name.value) ctors tparams
      is AUnitTypeDef (name) (unitbase) (s) ->
-      "const " & zig-sanitize (name.value) & " = " & emit-zig-atype unitbase & ";\n\n"
+      "pub const " & zig-sanitize (name.value) & " = " & emit-zig-atype unitbase & ";\n\n"
 
   zig-typedef-boxed-loop : List ATypeDef, Integer, Text -> Boolean
   zig-typedef-boxed-loop (tds) (i) (n) =
@@ -1815,18 +1815,18 @@ Section: Type Definition Emission
   emit-zig-sum-type : Text, List AVariantCtorDef, List Name -> Text
   emit-zig-sum-type (name) (ctors) (tparams) =
     if list-length tparams > 0 & variant-all-nullary ctors 0 then
-      "fn " & zig-sanitize name & "(" & zig-tparam-params tparams 0 & ") type {\n    return union(enum) {\n"
+      "pub fn " & zig-sanitize name & "(" & zig-tparam-params tparams 0 & ") type {\n    return union(enum) {\n"
          & emit-zig-union-ctors ctors 0 (list-length ctors) & "    };\n}\n\n"
     else if list-length tparams > 0 then
-      "fn " & zig-sanitize name & "S(" & zig-tparam-params tparams 0 & ") type {\n    return union(enum) {\n"
+      "pub fn " & zig-sanitize name & "S(" & zig-tparam-params tparams 0 & ") type {\n    return union(enum) {\n"
          & emit-zig-union-ctors ctors 0 (list-length ctors) & "    };\n}\n"
-         & "fn " & zig-sanitize name & "(" & zig-tparam-params tparams 0 & ") type {\n    return *"
+         & "pub fn " & zig-sanitize name & "(" & zig-tparam-params tparams 0 & ") type {\n    return *"
          & zig-sanitize name & "S(" & zig-tparam-args tparams 0 & ");\n}\n\n"
     else if variant-all-nullary ctors 0 then
-      "const " & zig-sanitize name & " = enum {\n" & emit-zig-enum-ctors ctors 0 (list-length ctors) & "};\n\n"
+      "pub const " & zig-sanitize name & " = enum {\n" & emit-zig-enum-ctors ctors 0 (list-length ctors) & "};\n\n"
     else
-      "const " & zig-sanitize name & "S = union(enum) {\n" & emit-zig-union-ctors ctors 0 (list-length ctors) & "};\n"
-         & "const " & zig-sanitize name & " = *" & zig-sanitize name & "S;\n\n"
+      "pub const " & zig-sanitize name & "S = union(enum) {\n" & emit-zig-union-ctors ctors 0 (list-length ctors) & "};\n"
+         & "pub const " & zig-sanitize name & " = *" & zig-sanitize name & "S;\n\n"
 
   emit-zig-enum-ctors : List AVariantCtorDef, Integer, Integer -> Text
   emit-zig-enum-ctors (ctors) (i) (len) =
@@ -1874,13 +1874,13 @@ Section: Type Definition Emission
   emit-zig-record-type : Text, List ARecordFieldDef, List Name -> Text
   emit-zig-record-type (name) (fields) (tparams) =
     if list-length tparams > 0 then
-      "fn " & zig-sanitize name & "S(" & zig-tparam-params tparams 0 & ") type {\n    return struct {\n"
+      "pub fn " & zig-sanitize name & "S(" & zig-tparam-params tparams 0 & ") type {\n    return struct {\n"
          & emit-zig-record-fields fields 0 tparams & "    };\n}\n"
-         & "fn " & zig-sanitize name & "(" & zig-tparam-params tparams 0 & ") type {\n    return *"
+         & "pub fn " & zig-sanitize name & "(" & zig-tparam-params tparams 0 & ") type {\n    return *"
          & zig-sanitize name & "S(" & zig-tparam-args tparams 0 & ");\n}\n\n"
     else
-      "const " & zig-sanitize name & "S = struct {\n" & emit-zig-record-fields fields 0 tparams & "};\n"
-         & "const " & zig-sanitize name & " = *" & zig-sanitize name & "S;\n\n"
+      "pub const " & zig-sanitize name & "S = struct {\n" & emit-zig-record-fields fields 0 tparams & "};\n"
+         & "pub const " & zig-sanitize name & " = *" & zig-sanitize name & "S;\n\n"
 
   zig-tparam-args : List Name, Integer -> Text
   zig-tparam-args (tparams) (i) =
@@ -4643,6 +4643,128 @@ Section: Chapter Emission
     & "    const t = std.Thread.spawn(.{ .stack_size = stack_bytes }, cx_entry, .{}) catch @panic(\"spawn\");\n"
     & "    t.join();\n}\n"
 
+ LIBRARY MODE: a unit that defines `zig-library : Text = "|a|b|"` is a
+ library, which a host calls rather than runs; the build adds the
+ definition, so one chapter can be a program to one build and a library to
+ another. The names it lists are the exports (the prune keeps what they
+ reach, as for `wasm-exports`) and are emitted `pub`; an `opening` among
+ them is an export like any other. There is no entry and no `main`. In their place is what every host needs besides the
+ exports, `cx`: the Codex heap, whose region the host gives before the first
+ allocation, and text across the edge. Console lines go to the host's
+ `cx_host_print`, or nowhere. Nothing a library emits names a host call (std's
+ process environment, page allocator or debug print), so a host with no
+ operating system compiles it too.
+
+  zig-is-library : List IRDef -> Boolean
+  zig-is-library (defs) = zig-defines defs "zig-library" 0
+
+  zig-defines : List IRDef, Text, Integer -> Boolean
+  zig-defines (defs) (name) (i) = if i >= list-length defs then False
+    else if (list-at defs i).name == name then True
+    else zig-defines defs name (i + 1)
+
+ The exports as `zig-library` spells them, `|a|b|`, or "" with none.
+
+  zig-exports-text : List IRDef, Integer -> Text
+  zig-exports-text (defs) (i) = if i >= list-length defs then ""
+    else let d = list-at defs i
+    in if d.name == "zig-library" then (when d.body is IrTextLit (s) (sp) -> s is otherwise -> "")
+    else zig-exports-text defs (i + 1)
+
+  zig-pub-if-exported : Text, Text, Text -> Text
+  zig-pub-if-exported (exports) (name) (text) =
+    if text-length exports > 0 & text-contains exports ("|" & name & "|") then "pub " & text else text
+
+  zig-heap-floor-text : Text = "6291456"
+
+  zig-library-face : Text =
+    "comptime {\n"
+    & "    // The overflow guard, in a form Zig 0.16 and 0.17 both take (0.17 has\n"
+    & "    // no `.ReleaseFast` field: its modes are `.fast` and `.small`).\n"
+    & "    if (!@import(\"std\").debug.runtime_safety) @compileError(\"emitted Codex traps on Integer overflow through zig's safety checks; build it Debug or ReleaseSafe\");\n"
+    & "}\n\n"
+    & "/// The host's print for the chapter's Console lines (UTF-8, valid during\n"
+    & "/// the call); null, they go nowhere.\n"
+    & "pub var cx_host_print: ?*const fn ([]const u8) void = null;\n\n"
+    & "/// What a host calls besides the exports.\n"
+    & "pub const cx = struct {\n"
+    & "    /// The Codex heap's region, given before the first allocation and kept:\n"
+    & "    /// zeroed, as bare metal's boot zero-fills its heap. The same region\n"
+    & "    /// again changes nothing.\n"
+    & "    pub fn heapGive(region: []align(4096) u8) void {\n"
+    & "        if (cx_heap_mem.len != 0) {\n"
+    & "            if (cx_heap_mem.ptr == region.ptr and cx_heap_mem.len == region.len) return;\n"
+    & "            @panic(\"cx heap: the heap already has its region\");\n"
+    & "        }\n"
+    & "        cx_heap_mem = region;\n"
+    & "        cx_heap_reserve = region.len;\n"
+    & "    }\n\n"
+    & "    /// Bytes in use since the heap's base, garbage included.\n"
+    & "    pub fn heapUsed() i64 {\n"
+    & "        return cx_hp - " & zig-heap-floor-text & ";\n"
+    & "    }\n\n"
+    & "    /// The frontier now, to go back to with `heapBack`.\n"
+    & "    pub fn heapMark() i64 {\n"
+    & "        return cx_hp;\n"
+    & "    }\n\n"
+    & "    /// Everything allocated after `mark_at` given back: nothing kept may live there.\n"
+    & "    pub fn heapBack(mark_at: i64) void {\n"
+    & "        if (mark_at < " & zig-heap-floor-text & " or mark_at > cx_hp) @panic(\"cx heap: a mark that is not behind the frontier\");\n"
+    & "        cx_hp = mark_at;\n"
+    & "    }\n\n"
+    & "    /// Everything given back.\n"
+    & "    pub fn heapReset() void {\n"
+    & "        cx_hp = " & zig-heap-floor-text & ";\n"
+    & "    }\n\n"
+    & "    /// ASCII as the chapter's text holds it (CCE), on the Codex heap; a byte\n"
+    & "    /// that is no ASCII, or ASCII the table lacks, is refused.\n"
+    & "    pub fn fromAscii(s: []const u8) error{NotAscii}![]const u8 {\n"
+    & "        const out = cx_raw(u8, s.len);\n"
+    & "        for (s, 0..) |c, i| out[i] = cx_ascii_to_cce[c] orelse return error.NotAscii;\n"
+    & "        return out;\n"
+    & "    }\n\n"
+    & "    /// The chapter's text as UTF-8, on the Codex heap.\n"
+    & "    pub fn utf8(t: []const u8) []const u8 {\n"
+    & "        return cx_cce_to_utf8(t);\n"
+    & "    }\n\n"
+    & "    /// A record the chapter's types name, made on the Codex heap.\n"
+    & "    pub fn new(v: anytype) *@TypeOf(v) {\n"
+    & "        return cx_new(v);\n"
+    & "    }\n"
+    & "};\n\n"
+    & "const cx_ascii_to_cce: [256]?u8 = blk: {\n"
+    & "    var t: [256]?u8 = @splat(null);\n"
+    & "    for (cce_table, 0..) |cp, code| {\n"
+    & "        if (cp < 128 and t[cp] == null) t[cp] = @intCast(code);\n"
+    & "    }\n"
+    & "    break :blk t;\n"
+    & "};\n"
+
+ A library's own versions of four prelude parts, under the same names: the
+ heap's region the host's, Console lines to the host's print, no deck
+ report.
+
+  zig-library-parts : List ShakePart =
+    [ShakePart { name = "cx_heap_base", frags = [ShakeLit "fn ", ShakeUse "cx_heap_base", ShakeLit "() [*]u8 {\n    if (", ShakeUse "cx_heap_mem",
+       ShakeLit ".len == 0) @panic(\"cx heap: the host gives the region (cx.heapGive) before the first allocation\");\n    return ", ShakeUse "cx_heap_mem", ShakeLit ".ptr;\n}\n\n"] },
+     ShakePart { name = "cx_print_line", frags = [ShakeLit "fn ", ShakeUse "cx_print_line", ShakeLit "(s: []const u8) void {\n    if (cx_host_print) |p| p(",
+       ShakeUse "cx_cce_to_utf8", ShakeLit "(s));\n}\n"] },
+     ShakePart { name = "cx_print", frags = [ShakeLit "fn ", ShakeUse "cx_print", ShakeLit "(s: []const u8) void {\n    if (cx_host_print) |p| p(",
+       ShakeUse "cx_cce_to_utf8", ShakeLit "(s));\n}\n\n"] },
+     ShakePart { name = "cx_deck_report", frags = [ShakeLit "fn ", ShakeUse "cx_deck_report", ShakeLit "() void {}\n"] }]
+
+  zig-parts-for : Boolean -> List ShakePart
+  zig-parts-for (library) = if library then zig-swap-parts zig-prelude-parts 0 [] else zig-prelude-parts
+
+  zig-swap-parts : List ShakePart, Integer, List ShakePart -> List ShakePart
+  zig-swap-parts (ps) (i) (acc) = if i >= list-length ps then acc
+    else zig-swap-parts ps (i + 1) (acc & [zig-library-part (list-at ps i) 0])
+
+  zig-library-part : ShakePart, Integer -> ShakePart
+  zig-library-part (p) (j) = if j >= list-length zig-library-parts then p
+    else if (list-at zig-library-parts j).name == p.name then list-at zig-library-parts j
+    else zig-library-part p (j + 1)
+
  An uncaught failure in `opening` prints its message and exits 1, as the native
  targets print it and trap.
 
@@ -6456,30 +6578,33 @@ Section: Chapter Emission
     in let ns = zig-prelude-part-names
     in let shared = shared-const-names (m.defs)
     in let types-text = emit-zig-type-defs type-defs 0
-    in let main-text = zig-main opening-entry-point (m.defs) (ctx.failing)
+    in let library = zig-is-library (m.defs)
+    in let exports = if library then zig-exports-text (m.defs) 0 else ""
+    in let main-text = if library then zig-library-face else zig-main opening-entry-point (m.defs) (ctx.failing)
     in let m1 = bit-or (zig-mask-lo ns types-text) (zig-mask-lo ns main-text)
     in let m2 = bit-or (zig-mask-hi ns types-text) (zig-mask-hi ns main-text)
     in act
      print-uni (zig-mask-ceiling-check ns)
      print-uni types-text
-     zig-stream-defs ctx (m.defs) shared 0 main-text ns m1 m2
+     zig-stream-defs ctx (m.defs) shared 0 main-text ns m1 m2 exports (zig-parts-for library)
     end
 
-  zig-stream-defs : ZigCtx, List IRDef, List Text, Integer, Text, List Text, Integer, Integer -> [Console] Nothing
-  zig-stream-defs (ctx) (defs) (shared) (i) (main-text) (ns) (m1) (m2) =
+  zig-stream-defs : ZigCtx, List IRDef, List Text, Integer, Text, List Text, Integer, Integer, Text, List ShakePart -> [Console] Nothing
+  zig-stream-defs (ctx) (defs) (shared) (i) (main-text) (ns) (m1) (m2) (exports) (parts) =
     if i >= list-length defs then act
      print-uni main-text
      print-uni zig-postlude-banner
-     print-uni (shake-text zig-prelude-parts (zig-roots-of-masks ns m1 m2))
+     print-uni (shake-text parts (zig-roots-of-masks ns m1 m2))
     end
     else let h = __heap-save
-    in let text = emit-zig-def-or-shared (list-at defs i) ctx shared
+    in let d = list-at defs i
+    in let text = zig-pub-if-exported exports (d.name) (emit-zig-def-or-shared d ctx shared)
     in let n1 = bit-or m1 (zig-mask-lo ns text)
     in let n2 = bit-or m2 (zig-mask-hi ns text)
     in act
      print-uni text
      let restored = __heap-restore h
-     in zig-stream-defs ctx defs shared (i + 1) main-text ns n1 n2
+     in zig-stream-defs ctx defs shared (i + 1) main-text ns n1 n2 exports parts
     end
 
 Page 1

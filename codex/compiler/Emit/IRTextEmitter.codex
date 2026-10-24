@@ -703,8 +703,8 @@ Section: IR Dead Code Elimination
   ir-declared-exports-loop (defs) (i) (n) =
     if i == n then []
     else let d = list-at defs i
-    in if (d.name) == "wasm-exports"
-       then list-push (ir-export-names (ir-text-lit-value (d.body))) "wasm-exports"
+    in if (d.name) == "wasm-exports" | (d.name) == "zig-library"
+       then list-push (ir-export-names (ir-text-lit-value (d.body))) (d.name) & ir-declared-exports-loop defs (i + 1) n
     else ir-declared-exports-loop defs (i + 1) n
 
   ir-text-lit-value : IRExpr -> Text
@@ -748,8 +748,18 @@ Section: IR Dead Code Elimination
 
   ir-prune-roots-indexed : IRChapter, List Text, OffsetTable -> IRChapter
   ir-prune-roots-indexed (m) (roots) (tbl) =
-    if offset-table-get tbl (list-at roots 0) < 0 then m
+    if offset-table-get tbl (list-at roots 0) < 0 & not (ir-any-root-known (ir-declared-exports m) tbl 0) then m
     else ir-prune-roots-flood m roots tbl
+
+ What the prune keeps: every definition reachable from `opening` or from
+ the names a `wasm-exports` or `zig-library` declaration lists. A chapter
+ with neither an opening nor such a declaration keeps every definition.
+
+  ir-any-root-known : List Text, OffsetTable, Integer -> Boolean
+  ir-any-root-known (roots) (tbl) (i) =
+    if i == list-length roots then False
+    else if offset-table-get tbl (list-at roots i) >= 0 then True
+    else ir-any-root-known roots tbl (i + 1)
 
   ir-prune-roots-flood : IRChapter, List Text, OffsetTable -> IRChapter
   ir-prune-roots-flood (m) (roots) (tbl) =

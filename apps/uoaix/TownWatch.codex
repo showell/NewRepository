@@ -99,15 +99,3 @@ Chapter: TownWatch
     in json-emit (json-object [json-pair "x" (json-int map.x), json-pair "y" (json-int map.y),
       json-pair "width" (json-int map.width), json-pair "height" (json-int map.height),
       json-pair "shops" (json-array (tw-shops bb-shops 0 map []))])
-
- A program running the town for its first ticks: what keeps exactly the
- definitions a host calls when this chapter is built as a library, which
- has no opening of its own to keep them. tw-tick is called twice: the
- emitter inlines a definition this small that has one caller.
-
-  opening : [Console] Nothing = let w = tw-new 0
-    in let ticked = tw-tick w 21600 & tw-tick w 21630
-    in act
-      print-line-uni (tw-map-json w)
-      print-line-uni (tw-json w (if ticked then 21600 else -1))
-    end
