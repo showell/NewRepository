@@ -14,6 +14,7 @@ Section: State Keys
   sk-conv-count : Text = "conv-count"
   sk-msg-count : Text = "msg-count"
   sk-msgs-shown : Text = "msgs-shown"
+  sk-convs-seen : Text = "convs-seen"
   sk-compose : Text = "compose-text"
   sk-ws-status : Text = "ws-status"
   sk-contact-count : Text = "contact-count"
@@ -343,9 +344,15 @@ Section: Data Loading
     let tok = state-get-text "token"
     in fetch-get-then ("/api/chat/conversations?t=" & tok) convs-cb
 
+ The poll asks for the list too, so a conversation someone else starts
+ with you shows up without a reload; an answer the same as the last one
+ changes nothing on the page and is not drawn again.
+
   convs-cb : Text -> Integer
   convs-cb (resp) =
-    let obj = json-parse-obj resp
+    if resp == state-get-text sk-convs-seen then 0
+    else let k = state-set-text sk-convs-seen resp
+    in let obj = json-parse-obj resp
     in let count-str = json-obj-field obj "count"
     in let count = text-to-int count-str
     in let s = state-set sk-conv-count count
@@ -531,9 +538,9 @@ Section: Entry
 
   poll-messages : Integer -> Integer
   poll-messages (x) =
-    let active = state-get sk-active-conv
-    in if active < 0 then set-timeout poll-messages 3000
-    else let r = load-messages 0
+    let c = if state-get-text "token" == "" then 0 else load-conversations 0
+    in let active = state-get sk-active-conv
+    in let m = if active < 0 then 0 else load-messages 0
     in set-timeout poll-messages 3000
 
   opening : [Console] Integer

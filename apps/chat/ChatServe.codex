@@ -1,0 +1,167 @@
+Chapter: ChatServe
+  cites Chat chapter ChatServer
+  cites Chat chapter ChatStore
+  cites Net chapter WebServer
+  cites Net chapter NetIO
+  cites Net chapter TcpTransport
+  cites Net chapter NetworkStack
+  cites Net chapter Tcp
+  cites Works chapter Http
+  cites Foreword chapter Fat16
+  cites Foreword chapter Random
+  cites Foreword chapter CCE
+  cites Foreword chapter Tuple
+
+ Codex Chat on bare metal: the network shell around ChatServer, as
+ IdeaServer is Idea Forge's, and the one thing apps/chat/web/server.ps1 was
+ that this tree did not have. It listens on guest port 9200 and serves one
+ connection at a time (boot with -portfwd <host>:9200, or QEMU's hostfwd to
+ it); the state is ChatStore's, read off the boot volume once and written
+ after every request that changes it, so a reboot finds the chat it left.
+ The page is on the same disk: CHAT.HTM, ChatPage as the HTML plug builds
+ it, served at `/`.
+
+ What ChatServer asks of its host this shell answers from the machine. A
+ token is a word from the processor's random number generator, in 16 hex
+ digits; with none to be had, nobody can claim a name and the shell says
+ so. The time is the time since boot, as Idea Forge's day is: this tree has
+ no wall clock to ask.
+
+ We say:
+
+Section: The Host's Facts
+
+  chat-tick-count-addr : Integer = 28672
+
+  chat-uptime-seconds : Integer -> Integer
+  chat-uptime-seconds (x) =
+    let a = chat-tick-count-addr
+    in let ticks = peek-byte a 0 + bit-shl (peek-byte a 1) 8 + bit-shl (peek-byte a 2) 16 + bit-shl (peek-byte a 3) 24
+    in (ticks * pit-count) / pit-input-hz
+
+  chat-two-digits : Integer -> Text
+  chat-two-digits (n) = if n < 10 then "0" & show n else show n
+
+  chat-clock : Integer -> Text
+  chat-clock (x) =
+    let s = chat-uptime-seconds 0
+    in let h = s / 3600
+    in let m = s / 60
+    in chat-two-digits (h - (h / 24) * 24) & ":" & chat-two-digits (m - (m / 60) * 60)
+
+  chat-hex-word : Integer, Integer, Text -> Text
+  chat-hex-word (w) (k) (acc) =
+    if k < 0 then acc
+    else chat-hex-word w (k - 1) (acc & char-to-text (char-at "0123456789abcdef" (bit-and (bit-shr w (k * 4)) 15)))
+
+  chat-fresh-token : Integer -> Text
+  chat-fresh-token (x) =
+    when hardware-random-words 1
+      is Just (ws) -> if list-length ws > 0 then chat-hex-word (list-at ws 0) 15 "" else ""
+      is None -> ""
+
+Section: Answering
+
+  ChatAnswer = record {
+   an-state : ChatState,
+   an-resp : HttpResponse
+  }
+
+  chat-page-path : Text = "CHAT.HTM"
+
+  chat-page : [Device.Block] HttpResponse
+  chat-page = act
+    vol <- fat16-boot-volume
+    when fat16-read-text vol chat-page-path
+      is Just (t) -> HttpResponse { status = http-200, content-type = "text/html", body = t }
+      is None -> HttpResponse { status = http-404, content-type = "text/plain", body = "no page on this disk: CHAT.HTM" }
+  end
+
+ The routes after which server.ps1 saved its state, and this shell saves
+ ChatStore's.
+
+  chat-changes : Text -> Boolean
+  chat-changes (p) =
+    p == "/api/chat/register" | p == "/api/chat/send" | p == "/api/chat/start" | p == "/api/chat/group"
+
+  chat-answer : ChatState, HttpRequest -> [Device.Block] ChatAnswer
+  chat-answer (st) (req) =
+    let p = chat-path-only (req.path)
+    in if p == "/" | p == "/chat.html" then act
+      page <- chat-page
+      ChatAnswer { an-state = st, an-resp = page }
+    end
+    else let tok = chat-fresh-token 0
+    in if p == "/api/chat/register" & text-length tok == 0 then
+      ChatAnswer { an-state = st, an-resp = chat-error "no random number generator to make a token" }
+    else let (st2, resp) = chat-route st (ChatHost { ch-time = chat-clock 0, ch-token = tok }) req
+    in if chat-changes p then act
+      saved <- chat-store-save st2
+      if saved then ChatAnswer { an-state = st2, an-resp = resp }
+      else ChatAnswer { an-state = st, an-resp = chat-error "the disk refused the write" }
+    end
+    else ChatAnswer { an-state = st2, an-resp = resp }
+
+Section: Serve Loop
+
+  chat-nat-gw-mac : List Integer = [82, 85, 10, 0, 2, 2]
+
+  chat-fresh-transport : Integer -> TcpTransportState
+  chat-fresh-transport (x) =
+    let sess = net-session-new local-mac local-ip gateway-ip 9200 0 gateway-ip 1000
+    in let sess2 = set-arp sess (arp-cache-add (sess.arp) gateway-ip chat-nat-gw-mac)
+    in transport-new sess2
+
+  ChatServeStep = record {
+   sv-state : ChatState,
+   sv-diag : Text
+  }
+
+  chat-serve-one : ChatState -> [Network.Read, Network.Write, Device.Block] ChatServeStep
+  chat-serve-one (st) =
+    let ts = net-io-listen (chat-fresh-transport 0)
+    in act
+      ts2 <- net-io-accept ts 0
+      when (ts2.session).conn.state
+        is TcpEstablished -> chat-handle-request st ts2
+        is otherwise -> ChatServeStep { sv-state = st, sv-diag = "no-conn" }
+    end
+
+  chat-handle-request : ChatState, TcpTransportState -> [Network.Read, Network.Write, Device.Block] ChatServeStep
+  chat-handle-request (st) (ts) = act
+    recv <- net-io-recv-raw ts 0
+    if recv.has-data then
+      let req = http-parse-request (recv.data)
+      in if req.valid == False then act
+        sent <- web-send-http (recv.transport) (http-error "Bad request")
+        ts1 <- net-io-close sent
+        ChatServeStep { sv-state = st, sv-diag = "bad-request" }
+      end
+      else act
+        answer <- chat-answer st req
+        sent <- web-send-http (recv.transport) (answer.an-resp)
+        ts1 <- net-io-close sent
+        ChatServeStep { sv-state = answer.an-state, sv-diag = req.path & " -> " & (answer.an-resp).status }
+      end
+    else act
+      ts1 <- net-io-close (recv.transport)
+      ChatServeStep { sv-state = st, sv-diag = "no-data" }
+    end
+  end
+
+  chat-serve-loop : ChatState, Integer -> [Console, Network.Read, Network.Write, Device.Block] Integer
+  chat-serve-loop (st) (count) = act
+    r <- chat-serve-one st
+    print-line-uni ("serve " & show count & " " & r.sv-diag)
+    chat-serve-loop (r.sv-state) (count + 1)
+  end
+
+Section: Entry
+
+  opening : [Console, Network.Read, Network.Write, Device.Block] Nothing
+  opening = act
+    st <- chat-store-load
+    print-line-uni ("codex-chat: " & show (list-length (st.cs-accounts)) & " names claimed; listening on guest port 9200")
+    served <- chat-serve-loop st 0
+    print-line-uni ("codex-chat closed after " & show served)
+  end
