@@ -15,9 +15,15 @@ Chapter: ChatServer
  the disk belong to the host.
 
  The host knows two things a route layer cannot: the time of day, which
- stamps a message, and fresh tokens, which name a session. server.ps1 drew a
- token from a GUID; a chapter with no randomness of its own is handed two
- with every request, enough for the one route that can make two accounts.
+ stamps a message, and a fresh token, which names a session. server.ps1 drew
+ a token from a GUID; a chapter with no randomness of its own is handed one
+ with every request, for the one route that makes an account.
+
+ A name is claimed by the first to register it and is theirs alone, with no
+ password: the token they are handed is the whole of their credential, and
+ the page keeps it. Registering a name already claimed is refused, and so is
+ talking to a name nobody has claimed (server.ps1 signed anyone in as a
+ taken name, and made an account for whoever was named in `start`).
 
  We say:
 
@@ -61,12 +67,11 @@ Section: State
   }
 
  What the host hands over with each request: the time as server.ps1 stamped
- it (`HH:mm`), and two fresh tokens nobody else holds.
+ it (`HH:mm`), and a fresh token nobody else holds.
 
   ChatHost = record {
    ch-time : Text,
-   ch-token : Text,
-   ch-token-2 : Text
+   ch-token : Text
   }
 
 Section: State Updates
@@ -107,15 +112,9 @@ Section: State Updates
     in if d.cv-id == c.cv-id then chat-put-conv-loop convs c (i + 1) (list-push acc c)
     else chat-put-conv-loop convs c (i + 1) (list-push acc d)
 
- An account a route names that does not exist yet is made with the second
- token, as server.ps1's `start` made the account of whoever it was asked to
- talk to.
-
-  chat-ensure-account : List ChatAccount, Text, Text -> List ChatAccount
-  chat-ensure-account (accts) (name) (tok) =
-    when chat-account-named accts name
-      is Just (a) -> accts
-      is None -> list-push accts (ChatAccount { ca-name = name, ca-token = tok, ca-contacts = [], ca-convs = [] })
+  chat-new-account : List ChatAccount, Text, Text -> List ChatAccount
+  chat-new-account (accts) (name) (tok) =
+    list-push accts (ChatAccount { ca-name = name, ca-token = tok, ca-contacts = [], ca-convs = [] })
 
   chat-join-all : List ChatAccount, List Text, Text, Integer -> List ChatAccount
   chat-join-all (accts) (names) (cid) (i) =
@@ -265,16 +264,16 @@ Section: Routing
 
 Section: Accounts
 
- Registering a name that is taken signs in as it, with its token, as
- server.ps1 did: the name is the whole of the credential.
+ Registering claims a name: the first to ask has it, with a fresh token,
+ and anyone after is told it is taken.
 
   chat-register : ChatState, ChatHost, Text -> (ChatState, HttpResponse)
   chat-register (st) (host) (q) =
     let name = chat-param q "name"
     in if text-length name < 1 then (st, chat-error "name required")
     else when chat-account-named (st.cs-accounts) name
-      is Just (a) -> (st, chat-token-json (a.ca-token) name)
-      is None -> (chat-with-accounts st (chat-ensure-account (st.cs-accounts) name (host.ch-token)), chat-token-json (host.ch-token) name)
+      is Just (a) -> (st, chat-error "name taken")
+      is None -> (chat-with-accounts st (chat-new-account (st.cs-accounts) name (host.ch-token)), chat-token-json (host.ch-token) name)
 
   chat-me : ChatState, Text -> (ChatState, HttpResponse)
   chat-me (st) (q) =
@@ -347,7 +346,8 @@ Section: Conversations
 
  Starting a conversation with someone you already talk to returns that
  conversation; otherwise a new direct one, numbered from the state's
- counter, joins both.
+ counter, joins both. Only someone who has claimed their name can be
+ talked to.
 
   chat-start : ChatState, ChatHost, Text -> (ChatState, HttpResponse)
   chat-start (st) (host) (q) =
@@ -358,16 +358,22 @@ Section: Conversations
   chat-start-with : ChatState, ChatHost, ChatAccount, Text -> (ChatState, HttpResponse)
   chat-start-with (st) (host) (u) (with-name) =
     if text-length with-name == 0 then (st, chat-error "with required")
-    else let accts = chat-ensure-account (st.cs-accounts) with-name (host.ch-token-2)
-    in let found = chat-find-dm (st.cs-convs) (u.ca-convs) with-name 0
-    in if text-length found > 0 then (chat-with-accounts st accts, chat-conv-id-json found)
+    else when chat-account-named (st.cs-accounts) with-name
+      is None -> (st, chat-error "no such user")
+      is Just (other) -> chat-start-dm st u with-name
+
+  chat-start-dm : ChatState, ChatAccount, Text -> (ChatState, HttpResponse)
+  chat-start-dm (st) (u) (with-name) =
+    let found = chat-find-dm (st.cs-convs) (u.ca-convs) with-name 0
+    in if text-length found > 0 then (st, chat-conv-id-json found)
     else let cid = "c" & show (st.cs-next-conv)
     in let conv = ChatConv { cv-id = cid, cv-kind = "dm", cv-members = [(u.ca-name), with-name], cv-messages = [], cv-name = "" }
-    in let joined = chat-join-all accts [(u.ca-name), with-name] cid 0
+    in let joined = chat-join-all (st.cs-accounts) [(u.ca-name), with-name] cid 0
     in (ChatState { cs-accounts = joined, cs-convs = list-push (st.cs-convs) conv, cs-next-conv = st.cs-next-conv + 1, cs-next-msg = st.cs-next-msg }, chat-conv-id-json cid)
 
- A group is its maker and every other name in `members` (comma-separated,
- trimmed); the members who have accounts are joined to it.
+ A group is its maker and every other claimed name in `members` (comma-
+ separated, trimmed); a name nobody has claimed is left out, so a member is
+ always someone who sees the group.
 
   chat-group : ChatState, ChatHost, Text -> (ChatState, HttpResponse)
   chat-group (st) (host) (q) =
@@ -378,17 +384,19 @@ Section: Conversations
   chat-group-named : ChatState, ChatAccount, Text, Text -> (ChatState, HttpResponse)
   chat-group-named (st) (u) (gname) (members) =
     if text-length gname == 0 then (st, chat-error "name required")
-    else let names = chat-group-members (text-split members ",") (u.ca-name) 0 [(u.ca-name)]
+    else let names = chat-group-members (st.cs-accounts) (text-split members ",") (u.ca-name) 0 [(u.ca-name)]
     in let cid = "c" & show (st.cs-next-conv)
     in let conv = ChatConv { cv-id = cid, cv-kind = "group", cv-members = names, cv-messages = [], cv-name = gname }
     in (ChatState { cs-accounts = chat-join-all (st.cs-accounts) names cid 0, cs-convs = list-push (st.cs-convs) conv, cs-next-conv = st.cs-next-conv + 1, cs-next-msg = st.cs-next-msg }, chat-conv-id-json cid)
 
-  chat-group-members : List Text, Text, Integer, List Text -> List Text
-  chat-group-members (parts) (me) (i) (acc) =
+  chat-group-members : List ChatAccount, List Text, Text, Integer, List Text -> List Text
+  chat-group-members (accts) (parts) (me) (i) (acc) =
     if i >= list-length parts then acc
     else let m = text-trim (list-at parts i)
-    in if text-length m == 0 | m == me then chat-group-members parts me (i + 1) acc
-    else chat-group-members parts me (i + 1) (list-push acc m)
+    in if text-length m == 0 | m == me | chat-has-text acc m 0 then chat-group-members accts parts me (i + 1) acc
+    else when chat-account-named accts m
+      is None -> chat-group-members accts parts me (i + 1) acc
+      is Just (a) -> chat-group-members accts parts me (i + 1) (list-push acc m)
 
 Section: Messages
 

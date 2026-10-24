@@ -22,7 +22,7 @@ Section: One Boot
   chat-get (path) = HttpRequest { method = "GET", path = path, body = "", valid = True }
 
   boot-host : Integer -> ChatHost
-  boot-host (n) = ChatHost { ch-time = "10:0" & show n, ch-token = "tok-" & show n, ch-token-2 = "unused" }
+  boot-host (n) = ChatHost { ch-time = "10:0" & show n, ch-token = "tok-" & show n }
 
   boot-step : ChatState -> ChatState
   boot-step (st) =

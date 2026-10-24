@@ -282,10 +282,19 @@ Section: Handlers
     in let r = fetch-get-then ("/api/chat/start?t=" & tok & "&with=" & url-encode name) start-conv-cb
     in 0
 
+ Only a claimed name can be talked to; the server says so of any other,
+ and the page says so too, rather than adding nothing to the list.
+
   start-conv-cb : Text -> Integer
   start-conv-cb (resp) =
-    let r = load-conversations 0
+    let err = json-obj-field (json-parse-obj resp) "error"
+    in if err == "no such user" then show-alert "New Conversation" "Nobody has claimed that name yet." alert-done
+    else if text-length err > 0 then show-alert "New Conversation" err alert-done
+    else let r = load-conversations 0
     in request-render 0
+
+  alert-done : Text -> Integer
+  alert-done (v) = 0
 
   select-conv : Text -> Integer
   select-conv (id) =
@@ -446,11 +455,17 @@ Section: Auth
     else let r = fetch-get-then ("/api/chat/register?name=" & url-encode name) register-cb
     in 0
 
+ A name is claimed by the first to ask for it; asking for one already
+ claimed is answered with the prompt again, saying why.
+
   register-cb : Text -> Integer
   register-cb (resp) =
     let obj = json-parse-obj resp
     in let tok = json-obj-field obj "token"
-    in if tok == "" then show-login 0
+    in if tok == "" then
+      (if json-obj-field obj "error" == "name taken"
+       then show-prompt "Welcome to CodexChat" "That name is taken. Choose another:" "your name" login-cb
+       else show-login 0)
     else let s1 = local-storage-set "chat-token" tok
     in let s2 = state-set-text "token" tok
     in let r = check-auth 0
