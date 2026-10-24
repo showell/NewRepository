@@ -443,9 +443,14 @@ Section: Auth
 
 Section: Entry
 
+ The compose bar and the message list are drawn only for an open
+ conversation (chat-area-tree), so with none open, as at the start, there is
+ nothing to wire or scroll, and asking the document for either answers null.
+
   wire-compose : Integer -> Integer
   wire-compose (x) =
-    let el = dom-get "msg-input"
+    if state-get sk-active-conv < 0 then 0
+    else let el = dom-get "msg-input"
     in let w = dom-on-input el on-compose-input
     in let el2 = dom-on-key el on-compose-key
     in 0
@@ -479,7 +484,8 @@ Section: Entry
 
   scroll-messages : Integer -> Integer
   scroll-messages (x) =
-    let el = dom-get "messages"
+    if state-get sk-active-conv < 0 then 0
+    else let el = dom-get "messages"
     in let s = dom-set-style el "scrollBehavior" "smooth"
     in 0
 
