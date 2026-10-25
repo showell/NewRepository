@@ -20,6 +20,13 @@ Chapter: GameAccounts
   ga-dev : Integer = 1
   ga-british-name : List Integer = [66,114,105,116,105,115,104]
   ga-british-password : List Integer = [65,115,116,114,111,110,97,117,116]
+ British's password is public, so his hash is too: PBKDF2-HMAC-SHA256 of
+ ga-british-password at ga-iterations over this fixed salt (16 bytes of
+ SHA-256 over "uoaix: British's public password"), made once offline
+ (openssl kdf) and written by ga-new, which otherwise spent a whole
+ derivation on every new table: every boot, every town's start over.
+  ga-british-salt : List Integer = [#C4,#82,#E1,#CE,#FB,#4F,#B4,#AB,#7D,#51,#F8,#D3,#47,#6C,#71,#47]
+  ga-british-hash : List Integer = [#01,#8F,#4D,#1C,#6E,#68,#9B,#6C,#B0,#3F,#17,#92,#1A,#24,#38,#D2,#37,#D9,#DC,#9C,#A5,#3B,#F5,#6C,#8E,#2A,#FB,#96,#6D,#9A,#B0,#53]
 
   ga-params : PbkdfParams = PbkdfParams { pb-iterations = ga-iterations, pb-hash-length = 32 }
   ga-at : Integer, Integer -> Integer
@@ -85,7 +92,7 @@ Chapter: GameAccounts
   ga-new (mode) = let table = alloc-bytes (ga-bytes + 8)
     in let cleared = ga-zero table (ga-bytes + 8) 0
     in let moded = poke-qword table 16 mode
-    in let british = ga-create table ga-british-name ga-british-password
+    in let british = ga-create-hashed table ga-british-name ga-british-salt ga-british-hash
     in table
 
   ga-set-mode : Integer, Integer -> Integer
@@ -176,15 +183,34 @@ Section: Hashes
     in let restored = __heap-restore mark
     in ok
 
-  ga-create : Integer, List Integer, List Integer -> Result Integer Text
-  ga-create (table) (name) (password) =
+ A new record holding `name`, its index, or why there is none.
+  ga-add-name : Integer, List Integer -> Result Integer Text
+  ga-add-name (table) (name) =
     let count = ga-count table
     in if count >= ga-room table then Err "account capacity"
     else if list-length name < 1 | list-length name > 30 then Err "account name length"
     else if ga-find table name 0 >= 0 then Err "account exists"
     else let named = ga-put (ga-at table count) name 0
     in let counted = poke-qword table 0 (count + 1)
-    in ga-write-hash table count password
+    in Ok count
+
+  ga-create : Integer, List Integer, List Integer -> Result Integer Text
+  ga-create (table) (name) (password) = when ga-add-name table name
+    is Err (e) -> Err e
+    is Ok (index) -> ga-write-hash table index password
+
+ An account whose salt and hash are already known (British's, made
+ offline): written as ga-write-hash writes a derived one, the salt
+ counter bumped as ga-salt bumps it, so every later account's salt is
+ the one it had when British's was derived here.
+  ga-create-hashed : Integer, List Integer, List Integer, List Integer -> Result Integer Text
+  ga-create-hashed (table) (name) (salt) (hash) = when ga-add-name table name
+    is Err (e) -> Err e
+    is Ok (index) -> let at = ga-at table index
+      in let bumped = poke-qword table 24 (peek-qword table 24 + 1)
+      in let s = ga-put (at + 32) salt 0
+      in let h = ga-put (at + 48) hash 0
+      in Ok index
 
  Record byte 31 is the ban flag: a name is at most 30 bytes, so its two padding bytes were always zero and an older
  save reads every account as unbanned.
