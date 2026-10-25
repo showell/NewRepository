@@ -95,8 +95,9 @@ Chapter: TownWatch
     in let restored = __heap-restore mark
     in ok & walked
 
- A player in seat `slot` (0 to 4), named `name`: its body made at the
- town's entrance the first time, bound into the account's character slot,
+ A player in seat `slot` (0 to 4), named `name`: its body made by the
+ town's entrance the first time, each seat on its own tile two west of the
+ last, so five players are five bodies to see, bound into the account's character slot,
  so the townsfolk know it, with a backpack and a purse, so the keepers trade
  with it (cg-bind's rule: the first player keeps the installation's actor 1,
  each later one its own kind-3 purse, empty). A later player of the seat
@@ -109,7 +110,7 @@ Chapter: TownWatch
     in let named = __record-set p "name" name
     in let still = __record-set p "gx" (0 - 1)
     in if p.serial > 0 then p.serial
-    else when world-create t.vendors.game.world (gs-mobile 0 t.entrance.x t.entrance.y t.entrance.z 400 1002)
+    else when world-create t.vendors.game.world (gs-mobile 0 (t.entrance.x - 2 * slot) (t.entrance.y + 2) t.entrance.z 400 1002)
       is Err (_) -> 0 - 1
       is Ok (serial) -> let bound = poke-qword t.vendors.game.characters (slot * 160) serial
         in let kept = __record-set p "serial" serial
