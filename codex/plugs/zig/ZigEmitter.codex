@@ -101,7 +101,7 @@ Section: Keywords and Sanitization
    "cx_heap_vtable", "cx_hp", "cx_gpa", "cx_dptr", "cx_bivy", "cx_nest",
    "cx_deck_base", "cx_deck_hw", "cx_deck_top", "cx_deck_best",
    "cx_deck_stride", "cx_deck_armed", "cx_deck_slack", "cx_deck_fd", "cx_environ", "cx_init", "cx_env", "CxFn1", "CxFn2",
-   "CxFn3", "CxFn4", "CxFn5", "CxFn6", "CxList", "cx_ll_empty", "cx_ll_push", "cx_ll_of",
+   "CxFn3", "CxFn4", "CxFn5", "CxFn6", "CxFn7", "CxList", "cx_ll_empty", "cx_ll_push", "cx_ll_of",
    "cx_ll_concat", "cx_ll_copy", "cx_ll_tail", "cx_raw_bytes_to_text", "cx_ll_cons", "cx_ll_insert_at",
    "cx_ll_with_capacity",
    "cx_text_compare", "cx_text_to_double_bits", "cx_bits_to_real_approx",
@@ -289,7 +289,7 @@ Section: Type Mapping
 
   zig-closure-type : Integer, Text, Text -> Text
   zig-closure-type (n) (params) (result) =
-    if n < 1 | n > 6
+    if n < 1 | n > 7
     then "@compileError(\"closure arity " & integer-to-text n & " unsupported\")"
     else "CxFn" & integer-to-text n & "(" & params & ", " & result & ")"
 
@@ -1071,7 +1071,7 @@ Section: Builtin Emitter
 
  poke-qword is two poke-32s, low word first: the little-endian qword
  peek-qword reads back, answering what poke-32 answers. It needs no part
- of its own, since the parts table is one short of the shake masks' 128.
+ of its own: the parts table is full at the shake masks' 128.
 
   zig-poke-qword : List IRExpr, ZigCtx, Integer -> Text
   zig-poke-qword (args) (ctx) (d) =
@@ -4889,6 +4889,13 @@ Section: Chapter Emission
     ShakeLit "(comptime A: type, comptime B: type, comptime C: type, comptime D: type, comptime E: type, comptime F: type, comptime R: type) type {\n    return struct { ctx: *anyopaque, call: *const fn (*anyopaque, A, B, C, D, E, F) R };\n}\n"
   ]
 
+  zig-p-cxfn7 : List ShakeFrag
+  zig-p-cxfn7 = [
+    ShakeLit "fn ",
+    ShakeUse "CxFn7",
+    ShakeLit "(comptime A: type, comptime B: type, comptime C: type, comptime D: type, comptime E: type, comptime F: type, comptime G: type, comptime R: type) type {\n    return struct { ctx: *anyopaque, call: *const fn (*anyopaque, A, B, C, D, E, F, G) R };\n}\n"
+  ]
+
   zig-p-cxlist : List ShakeFrag
   zig-p-cxlist = [
     ShakeLit "fn ",
@@ -5874,7 +5881,7 @@ Section: Chapter Emission
 
  One part, named by the prefix every op's call carries, so a program that
  performs any of them keeps all five and the host they share: the parts
- table is one place short of the shake masks' 128.
+ table is full at the shake masks' 128.
 
   zig-p-cx-fs : List ShakeFrag
   zig-p-cx-fs = [
@@ -6355,6 +6362,7 @@ Section: Chapter Emission
      ShakePart { name = "CxFn4", frags = zig-p-cxfn4 },
      ShakePart { name = "CxFn5", frags = zig-p-cxfn5 },
      ShakePart { name = "CxFn6", frags = zig-p-cxfn6 },
+     ShakePart { name = "CxFn7", frags = zig-p-cxfn7 },
      ShakePart { name = "CxList", frags = zig-p-cxlist },
      ShakePart { name = "cx_ll_empty", frags = zig-p-cx-ll-empty },
      ShakePart { name = "cx_ll_push", frags = zig-p-cx-ll-push },

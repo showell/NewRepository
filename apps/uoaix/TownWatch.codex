@@ -2,18 +2,38 @@ Chapter: TownWatch
   cites Uoaix chapter CrownFunding
   cites Uoaix chapter TownLiveCodec
   cites Uoaix chapter BritainShopHours
+  cites Uoaix chapter GameNpcSpeech
   cites Encode chapter Json
 
  Britain's town as TownLiveProof builds it (three residents, their shops
  and shared lodging, on a flat 128 by 224 map), kept by a host between
  calls: built once, its game clock advanced on request, and what a watcher
  draws, as JSON. The town is in `towns`, empty when it could not be built,
- and `problem` says why.
+ and `problem` says why. Players take its five seats (the account's five
+ character slots): each a body that walks where it is sent and that the
+ townsfolk greet, kept for the seat's next player.
 
-  TownWatch = record { towns : List TownLive, maps : List WalkMap, problem : Text }
+  TownWatch = record { towns : List TownLive, maps : List WalkMap, problem : Text,
+    speech : List NpcSpeech, players : List TwPlayer }
+
+ A seat: its body's serial (0 before its first player), its player's name
+ ("" while empty), where it is walking to (gx -1: nowhere), its route, when
+ it next steps, and its input, through which the townsfolk see it.
+
+  TwPlayer = record { serial : Integer, name : Text, gx : Integer, gy : Integer, walk : RteWalk,
+    next-step : Integer, input : GameInput }
+
+  tw-seat-count : Integer = 5
 
   tw-failed : Text -> TownWatch
-  tw-failed (why) = TownWatch { towns = [], maps = [], problem = why }
+  tw-failed (why) = TownWatch { towns = [], maps = [], problem = why, speech = [], players = [] }
+
+  tw-seats : Integer, List TwPlayer -> List TwPlayer
+  tw-seats (i) (acc) = if i == tw-seat-count then acc
+    else let input = gn-input-with bb-specs (100 + i)
+    in let mode = __record-set input "mode" 2
+    in let phase = __record-set input.session "phase" 2
+    in tw-seats (i + 1) (acc & [TwPlayer { serial = 0, name = "", gx = 0 - 1, gy = 0 - 1, walk = rte-walk 0, next-step = 0, input = input }])
 
   tw-fill : WalkMap, Integer -> Boolean
   tw-fill (map) (i) = if i == map.width * map.height then True
@@ -27,9 +47,11 @@ Chapter: TownWatch
     in let growing = bb-fixture-grow v items
     in when bb-populate v items map
       is Err (e) -> tw-failed ("shops " & e)
-      is Ok (_) -> when tl-populate v items map None 0 3
+      is Ok (shops) -> when tl-populate v items map None 0 3
         is Err (e) -> tw-failed ("population " & e)
-        is Ok (t) -> TownWatch { towns = [t], maps = [map], problem = "" }
+        is Ok (t) -> when ns-bind t shops (gmb-new items #004A)
+          is Err (e) -> tw-failed ("speech " & e)
+          is Ok (speech) -> TownWatch { towns = [t], maps = [map], problem = "", speech = [speech], players = tw-seats 0 [] }
 
   tw-new : Integer -> TownWatch
   tw-new (unused) = when bb-economy 0
@@ -63,10 +85,130 @@ Chapter: TownWatch
   tw-tick (w) (seconds) = if list-length w.towns == 0 then False
     else let t = list-at w.towns 0
     in let ok = tw-drain t (list-at w.maps 0) seconds 100
+    in let walked = tw-walk-all w t (list-at w.maps 0) seconds 0
     in let mark = __heap-save
     in let hours = bsh-shut t.vendors seconds 0 0
     in let restored = __heap-restore mark
-    in ok
+    in ok & walked
+
+ A player in seat `slot` (0 to 4), named `name`: its body made at the
+ town's entrance the first time and bound into the account's character
+ slot, so the townsfolk know it; a later player of the seat takes the body
+ where it stands. Its serial, or -1.
+
+  tw-join : TownWatch, Integer, Text -> Integer
+  tw-join (w) (slot) (name) = if list-length w.towns == 0 | slot < 0 | slot >= list-length w.players then 0 - 1
+    else let t = list-at w.towns 0
+    in let p = list-at w.players slot
+    in let named = __record-set p "name" name
+    in let still = __record-set p "gx" (0 - 1)
+    in if p.serial > 0 then p.serial
+    else when world-create t.vendors.game.world (gs-mobile 0 t.entrance.x t.entrance.y t.entrance.z 400 1002)
+      is Err (_) -> 0 - 1
+      is Ok (serial) -> let bound = poke-qword t.vendors.game.characters (slot * 160) serial
+        in let kept = __record-set p "serial" serial
+        in let seen = __record-set p.input.session "serial" serial
+        in serial
+
+ The seat empty again: its body stays where it stands.
+
+  tw-leave : TownWatch, Integer -> Boolean
+  tw-leave (w) (slot) = if slot < 0 | slot >= list-length w.players then False
+    else let p = list-at w.players slot
+    in let named = __record-set p "name" ""
+    in let still = __record-set p "gx" (0 - 1)
+    in True
+
+ Send the seat's body to (x, y): it walks there from the next step on, by
+ the townsfolk's own routes. False off the map or with no body.
+
+  tw-goal : TownWatch, Integer, Integer, Integer -> Boolean
+  tw-goal (w) (slot) (x) (y) = if list-length w.towns == 0 | slot < 0 | slot >= list-length w.players then False
+    else let p = list-at w.players slot
+    in let map = list-at w.maps 0
+    in if p.serial <= 0 | x < map.x | y < map.y | x >= map.x + map.width | y >= map.y + map.height then False
+    else let a = __record-set p "gx" x
+    in let b = __record-set p "gy" y
+    in let c = __record-set p "next-step" (list-at w.towns 0).now
+    in True
+
+  tw-walk-all : TownWatch, TownLive, WalkMap, Integer, Integer -> Boolean
+  tw-walk-all (w) (t) (map) (seconds) (i) = if i == list-length w.players then True
+    else let one = tw-walk t map (list-at w.players i) seconds 64
+    in one & tw-walk-all w t map seconds (i + 1)
+
+ A body's steps due by `seconds`, one each tl-move-seconds as a resident's,
+ each step's scratch given back. It stops at its goal, or when its route
+ fails three times (a goal it cannot reach).
+
+  tw-walk : TownLive, WalkMap, TwPlayer, Integer, Integer -> Boolean
+  tw-walk (t) (map) (p) (seconds) (fuel) =
+    if fuel == 0 | p.serial <= 0 | p.gx < 0 | p.next-step > seconds then True
+    else let mark = __heap-save
+    in let went = tw-step t map p
+    in let restored = __heap-restore mark
+    in if went < 0 then False
+    else if went == 0 then True
+    else let next = __record-set p "next-step" (p.next-step + tl-move-seconds)
+    in tw-walk t map p seconds (fuel - 1)
+
+ One step, in scratch the caller gives back (the body's record from the
+ world, the route's packets): 1 stepped, 0 there or given up, -1 no body.
+
+  tw-step : TownLive, WalkMap, TwPlayer -> Integer
+  tw-step (t) (map) (p) = when world-get t.vendors.game.world p.serial
+    is Err (_) -> 0 - 1
+    is Ok (m) -> if (m.x == p.gx & m.y == p.gy) | p.walk.fails >= 3 then let done = __record-set p "gx" (0 - 1) in 0
+      else let stepped = rte-toward t.nav t.vendors.game map None p.walk m p.gx p.gy m.z in 1
+
+ What the townsfolk say to the players now, as JSON: each greeting's
+ speaker, the player, and the words. A resident greets a player at its own
+ shop, a keeper one who comes into its shop (tl-pulse, ns-pulse), each
+ once for a state of the day.
+
+  tw-greet : TownWatch, Integer -> Text
+  tw-greet (w) (seconds) = if list-length w.towns == 0 then "[]"
+    else json-emit (json-array (tw-greet-all w (list-at w.towns 0) (list-at w.maps 0) seconds 0 []))
+
+  tw-greet-all : TownWatch, TownLive, WalkMap, Integer, Integer, List JsonValue -> List JsonValue
+  tw-greet-all (w) (t) (map) (seconds) (i) (acc) = if i == list-length w.players then acc
+    else let p = list-at w.players i
+    in if p.serial <= 0 | text-length p.name == 0 then tw-greet-all w t map seconds (i + 1) acc
+    else let game = t.vendors.game
+    in let active = __record-set game "active" p.serial
+    in let residents = tw-heard p (tl-pulse t game p.input map 2593 seconds) acc
+    in tw-greet-all w t map seconds (i + 1) (tw-heard p (ns-pulse (list-at w.speech 0) game p.input map 2593 seconds) residents)
+
+  tw-heard : TwPlayer, Result (Maybe GameReply) Text, List JsonValue -> List JsonValue
+  tw-heard (p) (r) (acc) = when r
+    is Err (_) -> acc
+    is Ok (None) -> acc
+    is Ok (Just (reply)) -> tw-lines p reply.packets 0 acc
+
+ A speech packet (0x1C): the speaker's name in 30 bytes at 14, the words
+ from 44 to their 0.
+
+  tw-lines : TwPlayer, List (List Integer), Integer, List JsonValue -> List JsonValue
+  tw-lines (p) (packets) (i) (acc) = if i == list-length packets then acc
+    else let k = list-at packets i
+    in if list-length k < 45 | list-at k 0 /= 28 then tw-lines p packets (i + 1) acc
+    else tw-lines p packets (i + 1) (acc & [json-object [json-pair "who" (json-str (tw-ascii k 14 44)),
+      json-pair "to" (json-str p.name), json-pair "text" (json-str (tw-ascii k 44 (list-length k)))]])
+
+  tw-ascii : List Integer, Integer, Integer -> Text
+  tw-ascii (k) (from) (to) = utf8-bytes-to-text (tw-until-zero k from to [])
+
+  tw-until-zero : List Integer, Integer, Integer, List Integer -> List Integer
+  tw-until-zero (k) (i) (to) (acc) = if i >= to then acc
+    else if list-at k i == 0 then acc
+    else tw-until-zero k (i + 1) to (list-push acc (list-at k i))
+
+ Whether the town still holds together: Damian's own checks of the town
+ (TLC1) and of its currency.
+
+  tw-valid : TownWatch -> Boolean
+  tw-valid (w) = if list-length w.towns == 0 then False
+    else let t = list-at w.towns 0 in tlc-valid t (list-at w.maps 0) & euv-valid t.vendors.currency
 
  Each shop's keeper, in bb-shops' order (bb-populate makes them so): its
  trade, where it stands, and whether its shop is shut.
@@ -101,7 +243,17 @@ Chapter: TownWatch
   tw-json (w) (seconds) = if list-length w.towns == 0 then json-emit (json-object [json-pair "problem" (json-str w.problem)])
     else let t = list-at w.towns 0
     in json-emit (json-object [json-pair "seconds" (json-int seconds), json-pair "hour" (json-int (int-mod t.people.hour 24)),
-      json-pair "people" (json-array (tw-people t 0 [])), json-pair "keepers" (json-array (tw-keepers t 0 []))])
+      json-pair "people" (json-array (tw-people t 0 [])), json-pair "keepers" (json-array (tw-keepers t 0 [])),
+      json-pair "players" (json-array (tw-players w t 0 []))])
+
+  tw-players : TownWatch, TownLive, Integer, List JsonValue -> List JsonValue
+  tw-players (w) (t) (i) (acc) = if i == list-length w.players then acc
+    else let p = list-at w.players i
+    in if p.serial <= 0 | text-length p.name == 0 then tw-players w t (i + 1) acc
+    else when world-get t.vendors.game.world p.serial
+      is Err (_) -> tw-players w t (i + 1) acc
+      is Ok (m) -> tw-players w t (i + 1) (acc & [json-object [json-pair "seat" (json-int i), json-pair "name" (json-str p.name),
+        json-pair "x" (json-int m.x), json-pair "y" (json-int m.y), json-pair "walking" (json-bool (p.gx >= 0))]])
 
   tw-shop : BbShop -> JsonValue
   tw-shop (s) = json-object [json-pair "title" (json-str s.title), json-pair "premises" (json-str s.premises),
