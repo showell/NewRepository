@@ -363,11 +363,13 @@ Chapter: TownWatch
     in let inside = s.x1 >= map.x & s.x2 < map.x + map.width & s.y1 >= map.y & s.y2 < map.y + map.height
     in tw-shops shops (i + 1) map (if inside then acc & [tw-shop s] else acc)
 
- The map, once: its bounds and the shops inside it.
+ The map, once: its bounds, the shops inside it, and the residents' own
+ places, their shared lodging and the tavern's seats.
 
   tw-map-json : TownWatch -> Text
   tw-map-json (w) = if list-length w.maps == 0 then json-emit (json-object [json-pair "problem" (json-str w.problem)])
     else let map = list-at w.maps 0
     in json-emit (json-object [json-pair "x" (json-int map.x), json-pair "y" (json-int map.y),
       json-pair "width" (json-int map.width), json-pair "height" (json-int map.height),
-      json-pair "shops" (json-array (tw-shops bb-shops 0 map []))])
+      json-pair "shops" (json-array (tw-shops bb-shops 0 map [])),
+      json-pair "places" (json-array [tw-shop tl-home-region, tw-shop tl-tavern-region])])
