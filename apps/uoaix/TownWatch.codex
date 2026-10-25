@@ -1,6 +1,7 @@
 Chapter: TownWatch
   cites Uoaix chapter CrownFunding
   cites Uoaix chapter TownLiveCodec
+  cites Uoaix chapter BritainShopHours
   cites Encode chapter Json
 
  Britain's town as TownLiveProof builds it (three residents, their shops
@@ -54,11 +55,32 @@ Chapter: TownWatch
     in ok & tw-drain t map seconds (fuel - 1)
 
  The town brought to `seconds` of game time, which never goes back: every
- step due by then taken. False when there is no town or a step failed.
+ step due by then taken, and each shop open or shut by its hours
+ (bsh-shut, which builds its roles again at every call, so its scratch is
+ given back too). False when there is no town or a step failed.
 
   tw-tick : TownWatch, Integer -> Boolean
   tw-tick (w) (seconds) = if list-length w.towns == 0 then False
-    else tw-drain (list-at w.towns 0) (list-at w.maps 0) seconds 100
+    else let t = list-at w.towns 0
+    in let ok = tw-drain t (list-at w.maps 0) seconds 100
+    in let mark = __heap-save
+    in let hours = bsh-shut t.vendors seconds 0 0
+    in let restored = __heap-restore mark
+    in ok
+
+ Each shop's keeper, in bb-shops' order (bb-populate makes them so): its
+ trade, where it stands, and whether its shop is shut.
+
+  tw-keeper : TownLive, Integer -> JsonValue
+  tw-keeper (t) (i) = let v = list-at t.vendors.vendors i
+    in let at = when world-get t.vendors.game.world v.serial
+      is Err (_) -> [json-pair "x" (json-int -1), json-pair "y" (json-int -1)]
+      is Ok (m) -> [json-pair "x" (json-int m.x), json-pair "y" (json-int m.y)]
+    in json-object ([json-pair "title" (json-str (list-at bb-shops i).title), json-pair "shut" (json-int v.shut)] & at)
+
+  tw-keepers : TownLive, Integer, List JsonValue -> List JsonValue
+  tw-keepers (t) (i) (acc) = if i == bb-shop-count | i == t.vendors.vendor-count then acc
+    else tw-keepers t (i + 1) (acc & [tw-keeper t i])
 
   tw-person : TownLive, Integer -> JsonValue
   tw-person (t) (i) = let r = list-at t.residents i
@@ -72,14 +94,14 @@ Chapter: TownWatch
   tw-people : TownLive, Integer, List JsonValue -> List JsonValue
   tw-people (t) (i) (acc) = if i == t.count then acc else tw-people t (i + 1) (acc & [tw-person t i])
 
- What a watcher draws now: the game time, and where each resident is and
- what they are about (goal 0 home, 1 work, 2 tavern).
+ What a watcher draws now: the game time, where each resident is and what
+ they are about (goal 0 home, 1 work, 2 tavern), and the keepers.
 
   tw-json : TownWatch, Integer -> Text
   tw-json (w) (seconds) = if list-length w.towns == 0 then json-emit (json-object [json-pair "problem" (json-str w.problem)])
     else let t = list-at w.towns 0
     in json-emit (json-object [json-pair "seconds" (json-int seconds), json-pair "hour" (json-int (int-mod t.people.hour 24)),
-      json-pair "people" (json-array (tw-people t 0 []))])
+      json-pair "people" (json-array (tw-people t 0 [])), json-pair "keepers" (json-array (tw-keepers t 0 []))])
 
   tw-shop : BbShop -> JsonValue
   tw-shop (s) = json-object [json-pair "title" (json-str s.title), json-pair "premises" (json-str s.premises),
