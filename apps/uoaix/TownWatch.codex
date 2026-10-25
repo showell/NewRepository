@@ -92,9 +92,11 @@ Chapter: TownWatch
     in ok & walked
 
  A player in seat `slot` (0 to 4), named `name`: its body made at the
- town's entrance the first time and bound into the account's character
- slot, so the townsfolk know it; a later player of the seat takes the body
- where it stands. Its serial, or -1.
+ town's entrance the first time, bound into the account's character slot,
+ so the townsfolk know it, with a backpack and a purse, so the keepers trade
+ with it (cg-bind's rule: the first player keeps the installation's actor 1,
+ each later one its own kind-3 purse, empty). A later player of the seat
+ takes the body where it stands. Its serial, or -1.
 
   tw-join : TownWatch, Integer, Text -> Integer
   tw-join (w) (slot) (name) = if list-length w.towns == 0 | slot < 0 | slot >= list-length w.players then 0 - 1
@@ -108,7 +110,17 @@ Chapter: TownWatch
       is Ok (serial) -> let bound = poke-qword t.vendors.game.characters (slot * 160) serial
         in let kept = __record-set p "serial" serial
         in let seen = __record-set p.input.session "serial" serial
+        in let traded = tw-trader t serial
         in serial
+
+  tw-trader : TownLive, Integer -> Integer
+  tw-trader (t) (serial) = when world-create t.vendors.game.world (gs-item serial #0E75 0)
+    is Err (_) -> 0 - 1
+    is Ok (pack) -> let meta = gsi-register t.items pack 21 #003C False False
+      in let x = t.vendors.currency
+      in let actor = if t.vendors.player-count == 0 then 1
+        else let purse = eu-open x 3 serial in if purse < 1 then 0 - 1 else ep-admit x.world purse 100
+      in if actor < 1 then 0 - 1 else gv-add-player t.vendors serial actor pack
 
  The seat empty again: its body stays where it stands.
 
@@ -186,12 +198,13 @@ Chapter: TownWatch
     is Ok (Just (reply)) -> tw-lines p reply.packets 0 acc
 
  A speech packet (0x1C): the speaker's name in 30 bytes at 14, the words
- from 44 to their 0.
+ from 44 to their 0. One with no name is the player's own words echoed to
+ it, which the host already has.
 
   tw-lines : TwPlayer, List (List Integer), Integer, List JsonValue -> List JsonValue
   tw-lines (p) (packets) (i) (acc) = if i == list-length packets then acc
     else let k = list-at packets i
-    in if list-length k < 45 | list-at k 0 /= 28 then tw-lines p packets (i + 1) acc
+    in if list-length k < 45 | list-at k 0 /= 28 | list-at k 14 == 0 then tw-lines p packets (i + 1) acc
     else tw-lines p packets (i + 1) (acc & [json-object [json-pair "who" (json-str (tw-ascii k 14 44)),
       json-pair "to" (json-str p.name), json-pair "text" (json-str (tw-ascii k 44 (list-length k)))]])
 
@@ -202,6 +215,73 @@ Chapter: TownWatch
   tw-until-zero (k) (i) (to) (acc) = if i >= to then acc
     else if list-at k i == 0 then acc
     else tw-until-zero k (i + 1) to (list-push acc (list-at k i))
+
+ What a player says, heard by the townsfolk near it (ns-handler-at): a
+ keeper answers "vendor buy" with its prices, which tw-offers lists, and
+ anyone answers by name. `tick` is the host's clock in hundredths of a
+ second, which a keeper's quote lasts a minute of. The answer as JSON: the
+ lines said back, and the handler's note.
+
+  tw-say : TownWatch, Integer, Text, Integer -> Text
+  tw-say (w) (slot) (words) (tick) = if list-length w.towns == 0 | slot < 0 | slot >= list-length w.players then "{}"
+    else let p = list-at w.players slot
+    in if p.serial <= 0 | text-length words == 0 | text-length words > 120 then "{}"
+    else let t = list-at w.towns 0
+    in let game = t.vendors.game
+    in let active = __record-set game "active" p.serial
+    in let packet = gp-ascii [3, 0, text-length words + 9, 0, 3, 178, 0, 3] words 0 (text-length words + 1)
+    in let r = ns-handler-at (list-at w.speech 0) game p.input (list-at w.maps 0) 2593 packet tick
+    in json-emit (json-object [json-pair "heard" (json-array (tw-heard p r [])), json-pair "note" (json-str (tw-note r))])
+
+  tw-note : Result (Maybe GameReply) Text -> Text
+  tw-note (r) = when r
+    is Err (e) -> e
+    is Ok (None) -> ""
+    is Ok (Just (reply)) -> reply.note
+
+ The prices a keeper quoted the seat's player, as JSON: each offer's name,
+ price and quantity, in the order tw-buy takes them; empty when no quote
+ to buy stands.
+
+  tw-offers : TownWatch, Integer -> Text
+  tw-offers (w) (slot) = if list-length w.towns == 0 | slot < 0 | slot >= list-length w.players then "[]"
+    else let t = list-at w.towns 0
+    in let i = gv-player t.vendors (list-at w.players slot).serial 0
+    in if i < 0 then "[]"
+    else let gp = list-at t.vendors.players i
+    in if gp.side /= 1 then "[]"
+    else json-emit (json-array (tw-quotes t gp 0 []))
+
+  tw-quotes : TownLive, GvPlayer, Integer, List JsonValue -> List JsonValue
+  tw-quotes (t) (gp) (i) (acc) = if i >= gp.count then acc
+    else let q = list-at gp.offers i
+    in let named = when world-get t.vendors.game.world q.serial is Err (_) -> "" is Ok (o) -> gsi-name t.items o
+    in let art = item-art-name q.graphic
+    in let name = if text-length named > 0 & named /= "item" then named else if text-length art > 0 then art else "item " & show q.graphic
+    in tw-quotes t gp (i + 1) (acc & [json-object [json-pair "name" (json-str name),
+      json-pair "price" (json-int q.price), json-pair "quantity" (json-int q.quantity)]])
+
+ The seat's player buys `quantity` of offer `i` from the keeper that
+ quoted it: the client's cart packet (0x3B, one row in the backpack's
+ layer), settled by gv-handle-at as a sale, coin and goods moved. As JSON:
+ whether a sale was made, and what the keeper said.
+
+  tw-buy : TownWatch, Integer, Integer, Integer, Integer -> Text
+  tw-buy (w) (slot) (i) (quantity) (tick) = if list-length w.towns == 0 | slot < 0 | slot >= list-length w.players then "{}"
+    else let t = list-at w.towns 0
+    in let p = list-at w.players slot
+    in let v = t.vendors
+    in let g = gv-player v p.serial 0
+    in if g < 0 | quantity < 1 | quantity > 100 then "{}"
+    else let gp = list-at v.players g
+    in if gp.side /= 1 | i < 0 | i >= gp.count then json-emit (json-object [json-pair "bought" (json-bool False), json-pair "heard" (json-array [])])
+    else let game = v.game
+    in let active = __record-set game "active" p.serial
+    in let request = gp-put16 (gp-put32 (list-push (list-push (gp-put32 [59, 0, 15] gp.vendor) 2) 26) (list-at gp.offers i).serial) quantity
+    in let sales = v.sale-count
+    in let settled = gv-handle-at v game p.input request tick
+    in json-emit (json-object [json-pair "bought" (json-bool (v.sale-count > sales)), json-pair "heard" (json-array (tw-heard p settled [])),
+      json-pair "note" (json-str (tw-note settled))])
 
  Whether the town still holds together: Damian's own checks of the town
  (TLC1) and of its currency.
