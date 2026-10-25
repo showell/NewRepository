@@ -3,6 +3,7 @@ Chapter: TownWatch
   cites Uoaix chapter TownLiveCodec
   cites Uoaix chapter BritainShopHours
   cites Uoaix chapter GameNpcSpeech
+  cites Uoaix chapter TownLiveControl
   cites Encode chapter Json
 
  Britain's town as TownLiveProof builds it (three residents, their shops
@@ -77,7 +78,9 @@ Chapter: TownWatch
     in ok & tw-drain t map seconds (fuel - 1)
 
  The town brought to `seconds` of game time, which never goes back: every
- step due by then taken, and each shop open or shut by its hours
+ step due by then taken, the town's own clock at `seconds` (tl-advance moves
+ it only when someone steps, and an errand is timed from it), each shop
+ open or shut by its hours
  (bsh-shut, which builds its roles again at every call, so its scratch is
  given back too). False when there is no town or a step failed.
 
@@ -85,6 +88,7 @@ Chapter: TownWatch
   tw-tick (w) (seconds) = if list-length w.towns == 0 then False
     else let t = list-at w.towns 0
     in let ok = tw-drain t (list-at w.maps 0) seconds 100
+    in let now = __record-set t "now" (max t.now seconds)
     in let walked = tw-walk-all w t (list-at w.maps 0) seconds 0
     in let mark = __heap-save
     in let hours = bsh-shut t.vendors seconds 0 0
@@ -282,6 +286,20 @@ Chapter: TownWatch
     in let settled = gv-handle-at v game p.input request tick
     in json-emit (json-object [json-pair "bought" (json-bool (v.sale-count > sales)), json-pair "heard" (json-array (tw-heard p settled [])),
       json-pair "note" (json-str (tw-note settled))])
+
+ A player sends resident `person` (1 to 3) on an errand for a game hour
+ (tl-direct, with the resident's own actor): action 0 home, 1 to work, 4
+ to the tavern, 3 to keeper `keeper`'s shop (0 to 20). The resident sets
+ off at its next step and keeps its schedule again after. tl-direct's
+ answer: 0 sent, below 0 refused (an ill resident goes nowhere but home).
+
+  tw-errand : TownWatch, Integer, Integer, Integer -> Integer
+  tw-errand (w) (person) (action) (keeper) = if list-length w.towns == 0 then 0 - 10
+    else let t = list-at w.towns 0
+    in if person < 1 | person > t.count then 0 - 10
+    else let vendor = if action == 3 then (if keeper < 0 | keeper >= t.vendors.vendor-count then 0 - 1 else (list-at t.vendors.vendors keeper).serial) else 0
+    in if vendor < 0 then 0 - 12
+    else tl-direct t (list-at w.maps 0) None person (list-at t.residents (person - 1)).actor action vendor (t.now + 3600)
 
  Whether the town still holds together: Damian's own checks of the town
  (TLC1) and of its currency.
